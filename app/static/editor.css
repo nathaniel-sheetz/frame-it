@@ -1,0 +1,391 @@
+/* Ported from image_crop_upscale (static/css/style.css), re-coloured to the gallery's palette. */
+:root {
+    --bg: #14161a;
+    --panel: #1e2127;
+    --inset: #171a1f;
+    --line: #2e333c;
+    --text: #e8eaed;
+    --muted: #9aa1ac;
+    --accent: #d9a441;
+    --accent-ink: #1a1405;
+    --danger: #e0645c;
+    --ok: #6fbf8b;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg);
+    min-height: 100vh;
+    color: var(--text);
+}
+
+header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    border-bottom: 1px solid var(--line);
+}
+
+header h1 {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.spacer {
+    flex: 1;
+}
+
+.nav-link {
+    color: var(--text);
+    text-decoration: none;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 12px;
+}
+
+.nav-link:hover {
+    border-color: var(--muted);
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+.card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 16px;
+}
+
+.card h2 {
+    color: var(--accent);
+    margin-bottom: 16px;
+    font-size: 1.15rem;
+    font-weight: 600;
+}
+
+.instruction {
+    color: var(--muted);
+    margin-bottom: 15px;
+}
+
+/* Upload Area */
+.upload-area {
+    border: 2px dashed var(--line);
+    border-radius: 8px;
+    padding: 48px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.upload-area:hover,
+.upload-area.dragover {
+    border-color: var(--accent);
+    background: #1c1a14;
+}
+
+.upload-prompt svg {
+    color: var(--accent);
+    margin-bottom: 15px;
+}
+
+.upload-prompt p {
+    font-size: 1.1rem;
+    margin-bottom: 8px;
+}
+
+.file-types {
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+#upload-status,
+#upload-status-2,
+#process-status,
+#send-status {
+    margin-top: 15px;
+    text-align: center;
+    min-height: 1.45em;
+}
+
+/* Letterbox Toggle */
+.letterbox-toggle {
+    margin-bottom: 15px;
+}
+
+.toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+}
+
+.toggle-text {
+    font-weight: 500;
+}
+
+.toggle-hint {
+    background: var(--inset);
+    border: 1px solid var(--line);
+    padding: 10px 15px;
+    border-radius: 6px;
+    color: var(--accent);
+    font-size: 0.9rem;
+    margin-top: 8px;
+}
+
+/* Image Container */
+.image-container {
+    max-width: 100%;
+    max-height: 600px;
+    overflow: hidden;
+    border-radius: 8px;
+    margin-bottom: 15px;
+}
+
+#crop-image,
+#crop-image-2 {
+    max-width: 100%;
+    display: block;
+}
+
+.crop-info {
+    background: var(--inset);
+    border: 1px solid var(--line);
+    padding: 12px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    color: var(--muted);
+    text-align: center;
+}
+
+/* Buttons */
+.btn {
+    padding: 12px 24px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font: inherit;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+    display: inline-block;
+    text-decoration: none;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: #e6b455;
+}
+
+.btn-secondary {
+    background: var(--panel);
+    color: var(--text);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    border-color: var(--muted);
+}
+
+.btn-warning {
+    background: transparent;
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.btn-warning:hover {
+    background: #1c1a14;
+}
+
+.btn-sm {
+    padding: 8px 16px;
+    font-size: 0.9rem;
+}
+
+/* Status text */
+.loading {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.error {
+    color: var(--danger);
+    font-weight: 600;
+}
+
+.success {
+    color: var(--ok);
+    font-weight: 600;
+}
+
+/* Review Section */
+#download-section {
+    text-align: center;
+}
+
+.result-preview {
+    background: #000;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 15px;
+    aspect-ratio: 16 / 9;
+}
+
+.result-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.send-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+/* Filename Edit */
+.filename-edit {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 20px 0 15px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    flex-wrap: wrap;
+}
+
+.filename-edit label {
+    font-weight: 600;
+}
+
+.filename-input {
+    padding: 10px 15px;
+    background: var(--inset);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+    min-width: 300px;
+    max-width: 100%;
+}
+
+.filename-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.filename-extension {
+    color: var(--muted);
+    font-weight: 600;
+}
+
+/* Diptych Controls */
+#diptych-controls {
+    text-align: center;
+    padding-top: 10px;
+    margin-top: 15px;
+    border-top: 1px solid var(--line);
+}
+
+#diptych-controls .btn {
+    margin-top: 10px;
+}
+
+.warning-text {
+    color: var(--accent);
+    font-size: 0.9rem;
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: #1c1a14;
+    border-radius: 6px;
+    border-left: 3px solid var(--accent);
+}
+
+#diptych-gap-control {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+}
+
+#diptych-gap-control label {
+    font-weight: 500;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+#diptych-gap-control input[type="range"] {
+    flex: 1;
+    min-width: 120px;
+    max-width: 200px;
+    accent-color: var(--accent);
+}
+
+#gap-percent-display {
+    color: var(--accent);
+    font-weight: 600;
+    min-width: 2rem;
+}
+
+#diptych-refresh-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #1c1a14;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 10px 15px;
+    margin-top: 8px;
+    gap: 12px;
+}
+
+#diptych-refresh-bar span {
+    color: var(--accent);
+    font-size: 0.9rem;
+}
+
+input[type="checkbox"] {
+    accent-color: var(--accent);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .card {
+        padding: 16px;
+    }
+
+    .filename-input {
+        min-width: 0;
+        width: 100%;
+    }
+}
