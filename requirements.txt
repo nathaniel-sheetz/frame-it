@@ -1,0 +1,5 @@
+samsungtvws @ git+https://github.com/NickWaterton/samsung-tv-ws-api.git
+fastapi
+uvicorn[standard]
+python-multipart
+pillow

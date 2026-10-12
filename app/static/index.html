@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frame TV Art</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1e2127; --line: #2e333c; --text: #e8eaed;
+    --muted: #9aa1ac; --accent: #d9a441; --danger: #e0645c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    padding: 16px; border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  .pill {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .pill.on { color: var(--accent); border-color: var(--accent); }
+  .pill.err { color: var(--danger); border-color: var(--danger); }
+  .spacer { flex: 1; }
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+  button {
+    font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1a1405; font-weight: 600; }
+  button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+
+  #drop {
+    border: 2px dashed var(--line); border-radius: 10px; padding: 20px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px;
+  }
+  #drop.over { border-color: var(--accent); background: #1c1a14; }
+  #drop label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  #drop .hint { color: var(--muted); }
+
+  #msg { min-height: 22px; margin-bottom: 12px; color: var(--muted); }
+  #msg.err { color: var(--danger); }
+
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .card.current { border-color: var(--accent); }
+  .thumb { position: relative; aspect-ratio: 16 / 9; background: #000; }
+  .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .badge {
+    position: absolute; top: 8px; left: 8px; background: var(--accent); color: #1a1405;
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+  }
+  .meta { padding: 8px 12px 0; font-size: 12px; color: var(--muted); }
+  .actions { display: flex; gap: 8px; padding: 10px 12px 12px; }
+  .actions button:first-child { flex: 1; }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Frame TV Art</h1>
+  <span id="state" class="pill">Connecting…</span>
+  <span id="count" class="pill" hidden></span>
+  <span class="spacer"></span>
+  <button id="refresh">Refresh</button>
+</header>
+<main>
+  <div id="drop">
+    <button id="pick" class="primary">Upload pictures</button>
+    <span class="hint">or drop image files here</span>
+    <span class="spacer"></span>
+    <label><input type="checkbox" id="crop" checked> Crop to fill the screen (16:9)</label>
+    <label><input type="checkbox" id="show"> Display after upload</label>
+    <input type="file" id="files" accept="image/*" multiple hidden>
+  </div>
+  <div id="msg"></div>
+  <div id="grid"></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const grid = $('grid'), msg = $('msg'), state = $('state'), count = $('count');
+let busy = false;
+
+function say(text, isError = false) {
+  msg.textContent = text;
+  msg.className = isError ? 'err' : '';
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `Request failed (${res.status})`);
+  return body;
+}
+
+function setBusy(value) {
+  busy = value;
+  document.querySelectorAll('button').forEach(b => b.disabled = value);
+}
+
+async function load() {
+  try {
+    const data = await api('/api/art');
+    state.textContent = data.art_mode ? 'Art Mode on' : 'Art Mode off (TV in use)';
+    state.className = 'pill' + (data.art_mode ? ' on' : '');
+    count.textContent = `${data.items.length} pictures`;
+    count.hidden = false;
+    render(data);
+  } catch (e) {
+    state.textContent = 'TV unreachable';
+    state.className = 'pill err';
+    say(e.message, true);
+  }
+}
+
+function render(data) {
+  grid.replaceChildren();
+  if (!data.items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No pictures on the TV yet.';
+    grid.append(empty);
+    return;
+  }
+  for (const item of data.items) {
+    const isCurrent = item.id === data.current;
+    const card = document.createElement('div');
+    card.className = 'card' + (isCurrent ? ' current' : '');
+
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    const img = document.createElement('img');
+    img.loading = 'lazy';
+    img.alt = item.id;
+    img.src = `/api/art/${item.id}/thumbnail`;
+    thumb.append(img);
+    if (isCurrent) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = data.art_mode ? 'On display' : 'Selected';
+      thumb.append(badge);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `${item.id} · ${item.width}×${item.height}`;
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const set = document.createElement('button');
+    set.textContent = isCurrent ? 'Current' : 'Set as art';
+    set.disabled = isCurrent;
+    set.onclick = () => select(item.id);
+    const del = document.createElement('button');
+    del.className = 'danger';
+    del.textContent = 'Remove';
+    del.onclick = () => remove(item.id);
+    actions.append(set, del);
+
+    card.append(thumb, meta, actions);
+    grid.append(card);
+  }
+}
+
+async function run(label, fn) {
+  if (busy) return;
+  setBusy(true);
+  say(label);
+  try {
+    say(await fn());
+  } catch (e) {
+    say(e.message, true);
+  }
+  setBusy(false);
+  await load();
+}
+
+function select(id) {
+  run('Setting artwork…', async () => {
+    const r = await api(`/api/art/${id}/select`, { method: 'POST' });
+    return r.shown ? 'Now on display.' : 'Selected. Art Mode is off, so it was not put on screen.';
+  });
+}
+
+function remove(id) {
+  if (!confirm(`Remove ${id} from the TV? This cannot be undone.`)) return;
+  run('Removing…', async () => {
+    await api(`/api/art/${id}`, { method: 'DELETE' });
+    return 'Removed.';
+  });
+}
+
+function upload(files) {
+  files = [...files].filter(f => f.type.startsWith('image/'));
+  if (!files.length) return;
+  run('', async () => {
+    let done = 0;
+    const failed = [];
+    for (const [i, file] of files.entries()) {
+      say(`Uploading ${i + 1} of ${files.length}: ${file.name}`);
+      const form = new FormData();
+      form.append('file', file);
+      form.append('crop', $('crop').checked);
+      // Only the last picture of a batch is put on display.
+      form.append('show', $('show').checked && i === files.length - 1);
+      try {
+        await api('/api/art', { method: 'POST', body: form });
+        done++;
+      } catch (e) {
+        failed.push(`${file.name}: ${e.message}`);
+      }
+    }
+    if (failed.length) throw new Error(`Uploaded ${done} of ${files.length}. Failed: ${failed.join('; ')}`);
+    return `Uploaded ${done} picture${done === 1 ? '' : 's'}.`;
+  });
+}
+
+$('pick').onclick = () => $('files').click();
+$('files').onchange = e => { upload(e.target.files); e.target.value = ''; };
+$('refresh').onclick = () => { say(''); load(); };
+
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => upload(e.dataTransfer.files));
+
+load();
+</script>
+</body>
+</html>

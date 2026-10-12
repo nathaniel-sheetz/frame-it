@@ -1,0 +1,11 @@
+[tv]
+host = "192.168.1.3"
+port = 8002
+# Name shown on the TV's "Allow" prompt and in its device list.
+name = "FrameArtProbe"
+timeout = 30
+
+[server]
+# 0.0.0.0 makes the app reachable from other devices on your network.
+host = "0.0.0.0"
+port = 8080
