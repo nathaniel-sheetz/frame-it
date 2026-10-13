@@ -10,6 +10,7 @@ import re
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,7 +114,7 @@ def _thumbnail(image: Image.Image) -> bytes:
     return _jpeg(image, THUMB_SIZE, 80)
 
 
-def _distinct(values: list[str]) -> list[str]:
+def _distinct(values: Iterable[str]) -> list[str]:
     """Tidied values in the order given, without blanks or the same one twice in other capitals."""
     kept, seen = [], set()
     for value in values:
@@ -311,8 +312,9 @@ class Library:
                 for row in db.execute("SELECT * FROM images ORDER BY added_at DESC, rowid DESC")
             ]
 
-    def edit(self, image_id: str, name: str | None = None, creators: list[str] | None = None,
-             subjects: list[str] | None = None) -> dict | None:
+    # Not list[str]: from here down in this class, `list` is the method above.
+    def edit(self, image_id: str, name: str | None = None, creators: Iterable[str] | None = None,
+             subjects: Iterable[str] | None = None) -> dict | None:
         """Rename a picture, or say who made it and what it shows. Anything left as None stays as it is."""
         with self._db() as db:
             row = db.execute("SELECT name FROM images WHERE id = ?", (image_id,)).fetchone()
