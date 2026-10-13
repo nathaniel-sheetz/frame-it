@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.frame-tv</string>
+  <!-- A system daemon, so it starts at boot with nobody logged in, but it
+       runs as an ordinary user rather than root. __USER__, __HOME__ and
+       __CHECKOUT__ are filled in by the install command in the README. -->
+  <key>UserName</key><string>__USER__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CHECKOUT__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>app</string>
+  </array>
+  <key>WorkingDirectory</key><string>__CHECKOUT__</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/frame-tv.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/frame-tv.log</string>
+</dict>
+</plist>
