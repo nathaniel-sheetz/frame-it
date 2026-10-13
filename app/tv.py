@@ -1,7 +1,8 @@
 """Thin wrapper around the Frame TV art channel.
 
 Everything here is limited to the art channel: no power or remote-key commands
-are ever sent, and only the "My Photos" category is managed.
+are ever sent, and only the "My Photos" category is managed. The one exception
+is pairing, which opens the remote-control channel once to be given a token.
 """
 import re
 import threading
@@ -11,11 +12,15 @@ from pathlib import Path
 import websocket
 from samsungtvws import exceptions
 from samsungtvws.art import SamsungTVArt
+from samsungtvws.connection import SamsungTVWSConnection
+from samsungtvws.remote import REMOTE_ENDPOINT
 
 from .config import TOKEN_FILE, Config
 
 MY_PHOTOS = "MY-C0002"
 _PHOTO_ID = re.compile(r"MY_F\d+")
+# Longer than a normal request: someone has to pick up the remote.
+PAIR_TIMEOUT = 60
 
 
 class TVUnavailable(Exception):
@@ -52,6 +57,8 @@ class FrameTV:
         )
         with self._lock:
             try:
+                if not TOKEN_FILE.exists():
+                    self._pair()
                 art.open()
                 yield art
             except exceptions.UnauthorizedError as e:
@@ -62,6 +69,31 @@ class FrameTV:
                 raise TVUnavailable(f"The TV rejected the request: {e}") from e
             finally:
                 art.close()
+
+    def _pair(self):
+        """Have the TV show its "Allow" prompt and save the token it hands back.
+
+        The token only comes over the remote-control channel. The art channel
+        shows the same prompt, but accepting it there never yields a token.
+        Opening the channel is all this does; no key presses are sent.
+        """
+        remote = SamsungTVWSConnection(
+            self._cfg.tv_host,
+            endpoint=REMOTE_ENDPOINT,
+            port=self._cfg.tv_port,
+            token_file=str(TOKEN_FILE),
+            timeout=PAIR_TIMEOUT,
+            name=self._cfg.tv_name,
+        )
+        try:
+            remote.open()
+        except exceptions.UnauthorizedError:
+            raise
+        except exceptions.ConnectionFailure as e:
+            # The TV answered, but not with a connection: its prompt went unanswered.
+            raise TVUnavailable('The TV is waiting for you to allow this app. Choose "Allow" on the TV and try again.') from e
+        finally:
+            remote.close()
 
     def snapshot(self, cached_thumbs: set[str]) -> dict:
         """Art mode state, current artwork, the photo list, and any thumbnails not yet cached."""
