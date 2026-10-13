@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app import editor, editor_routes
+from app import editor, editor_routes, fetch
 from app.editor_routes import _download_name, _stem, create_router
 from app.tv import TVUnavailable
 
@@ -148,6 +148,62 @@ class TestUpload:
     @pytest.mark.parametrize('name', ['photo.jpg', '..%5C..%5Cconfig.toml', '0' * 32 + '.gif'])
     def test_source_rejects_names_it_did_not_issue(self, client, name):
         assert client.get(f'/api/editor/source/{name}').status_code == 404
+
+
+class TestFetch:
+    def link(self, client, monkeypatch, data=None, name='Starry Night.jpg', error=None):
+        asked = []
+
+        def fake(url, max_bytes):
+            asked.append((url, max_bytes))
+            if error:
+                raise error
+            return data, name
+
+        monkeypatch.setattr(fetch, 'fetch', fake)
+        resp = client.post('/api/editor/fetch', json={'url': 'https://example.com/a.jpg'})
+        assert asked == [('https://example.com/a.jpg', editor_routes.MAX_UPLOAD_BYTES)]
+        return resp
+
+    def test_fetch_stores_a_source_like_an_upload(self, client, dirs, monkeypatch):
+        original = image_bytes(800, 600, fmt='PNG')
+        resp = self.link(client, monkeypatch, original)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data['success'] is True
+        assert data['original_filename'] == 'Starry Night.jpg'
+        assert (data['width'], data['height']) == (800, 600)
+        assert data['filename'].endswith('.png')
+        assert (dirs[0] / data['filename']).read_bytes() == original
+        assert process(client, data['filename']).status_code == 200
+
+    def test_fetch_checks_the_content_is_a_picture(self, client, dirs, monkeypatch):
+        resp = self.link(client, monkeypatch, b'{"not": "a picture"}')
+        assert resp.status_code == 400
+        assert 'not a picture' in resp.json()['detail']
+        assert list(dirs[0].iterdir()) == []
+
+    def test_fetch_names_the_formats_for_a_picture_it_cannot_use(self, client, dirs, monkeypatch):
+        resp = self.link(client, monkeypatch, image_bytes(100, 100, fmt='GIF'), 'anim.gif')
+        assert resp.status_code == 400
+        assert 'JPEG, PNG, WEBP or BMP' in resp.json()['detail']
+        assert list(dirs[0].iterdir()) == []
+
+    def test_fetch_failure_keeps_its_status_and_message(self, client, monkeypatch):
+        resp = self.link(client, monkeypatch, error=fetch.FetchError('The site answered with an error (404).', 502))
+        assert resp.status_code == 502
+        assert resp.json()['detail'] == 'The site answered with an error (404).'
+
+    @pytest.mark.parametrize('body', [{}, {'url': ''}, {'url': 'https://example.com/' + 'a' * 2048}])
+    def test_fetch_needs_a_link_of_sensible_length(self, client, body):
+        assert client.post('/api/editor/fetch', json=body).status_code == 422
+
+    def test_fetch_refuses_a_file_link(self, client, dirs):
+        # Not patched: the real download refuses before anything is stored.
+        resp = client.post('/api/editor/fetch', json={'url': 'file:///C:/Windows/win.ini'})
+        assert resp.status_code == 400
+        assert resp.json()['detail'] == 'Only http and https links are supported.'
+        assert list(dirs[0].iterdir()) == []
 
 
 class TestProcess:
@@ -343,6 +399,88 @@ class TestSendToTV:
     def test_send_when_tv_does_not_confirm_the_upload(self, client, tv):
         tv.content_id = ''
         resp = client.post(processed(client)['url'] + '/send', json={'show': True})
+        assert resp.status_code == 502
+        assert tv.selected == []
+
+
+class TestSendSource:
+    """The quick path: a stored source goes to the TV with the automatic fit."""
+
+    def send(self, client, size=(800, 600), **body):
+        src = upload(client, image_bytes(*size)).json()
+        return client.post(src['url'] + '/send', json=body)
+
+    def sent_size(self, tv):
+        assert len(tv.uploaded) == 1
+        with Image.open(io.BytesIO(tv.uploaded[0])) as img:
+            assert img.format == 'JPEG'
+            return img.size
+
+    def test_send_source_fills_the_screen_by_default(self, client, tv):
+        resp = self.send(client)
+        assert resp.status_code == 200
+        assert resp.json() == {'id': 'MY_F0001', 'selected': False, 'shown': False}
+        assert self.sent_size(tv) == (3840, 2160)
+        assert tv.selected == []
+
+    def test_send_source_without_body_uses_the_defaults(self, client, tv):
+        src = upload(client, image_bytes(800, 600)).json()
+        assert client.post(src['url'] + '/send').status_code == 200
+        assert self.sent_size(tv) == (3840, 2160)
+        assert tv.selected == []
+
+    def test_send_source_without_crop_keeps_the_shape(self, client, tv):
+        assert self.send(client, crop=False).status_code == 200
+        assert self.sent_size(tv) == (800, 600)
+
+    def test_send_source_without_crop_shrinks_an_oversized_picture(self, client, tv):
+        assert self.send(client, size=(5000, 2000), crop=False).status_code == 200
+        assert self.sent_size(tv) == (3840, 1536)
+
+    def test_send_source_that_is_not_a_jpeg(self, client, tv):
+        buf = io.BytesIO()
+        Image.new('RGBA', (800, 600), (255, 0, 0, 128)).save(buf, format='PNG')
+        src = upload(client, buf.getvalue(), 'glass.png').json()
+        assert client.post(src['url'] + '/send', json={}).status_code == 200
+        assert self.sent_size(tv) == (3840, 2160)
+
+    def test_send_source_that_can_no_longer_be_read(self, client, tv, dirs):
+        src = upload(client, image_bytes(800, 600)).json()
+        (dirs[0] / src['filename']).write_bytes(b'this is not an image')
+        resp = client.post(src['url'] + '/send', json={})
+        assert resp.status_code == 400
+        assert resp.json()['detail'] == 'That file is not an image this app can read.'
+        assert tv.uploaded == []
+
+    def test_send_source_and_show(self, client, tv):
+        resp = self.send(client, show=True)
+        assert resp.json() == {'id': 'MY_F0001', 'selected': True, 'shown': True}
+        assert tv.selected == ['MY_F0001']
+
+    @pytest.mark.parametrize('name', ['0' * 32 + '.jpg', 'photo.jpg', '0' * 32 + '.gif'])
+    def test_send_source_unknown_file(self, client, tv, name):
+        resp = client.post(f'/api/editor/source/{name}/send', json={})
+        assert resp.status_code == 404
+        assert tv.uploaded == []
+
+    def test_send_source_when_tv_unavailable(self, client, tv):
+        tv.unavailable = True
+        resp = self.send(client)
+        assert resp.status_code == 503
+        assert resp.json()['detail'] == 'Could not reach the TV.'
+
+    def test_send_source_succeeds_when_only_the_display_step_fails(self, client, tv):
+        tv.select_unavailable = True
+        resp = self.send(client, show=True)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert (data['id'], data['selected'], data['shown']) == ('MY_F0001', False, False)
+        assert 'could not be put on display' in data['warning']
+        assert len(tv.uploaded) == 1
+
+    def test_send_source_when_tv_does_not_confirm_the_upload(self, client, tv):
+        tv.content_id = ''
+        resp = self.send(client, show=True)
         assert resp.status_code == 502
         assert tv.selected == []
 

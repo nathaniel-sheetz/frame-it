@@ -46,8 +46,33 @@
     display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px;
   }
   #drop.over { border-color: var(--accent); background: #1c1a14; }
-  #drop label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
-  #drop .hint { color: var(--muted); }
+  .hint { color: var(--muted); }
+  #link-form { display: flex; flex: 1 1 320px; gap: 8px; }
+  #link {
+    flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+  }
+  #link:focus { outline: none; border-color: var(--accent); }
+
+  #staged {
+    display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; padding: 16px;
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 10px;
+  }
+  #staged[hidden] { display: none; }
+  #staged .thumb { flex: 0 1 320px; border-radius: 6px; overflow: hidden; }
+  .staged-body { flex: 1 1 320px; display: flex; flex-direction: column; gap: 12px; }
+  .staged-head { display: flex; align-items: center; gap: 12px; }
+  #staged-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .choice {
+    display: flex; flex-direction: column; gap: 8px; padding: 12px;
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .choice .go { padding: 10px 12px; text-align: center; font-weight: 600; }
+  .choice a.go { color: var(--accent); border-color: var(--accent); }
+  .choice a.go:hover { background: #1c1a14; }
+  .choice a.go.busy { opacity: .5; cursor: default; }
+  .choice label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
 
   #msg { min-height: 22px; margin-bottom: 12px; color: var(--muted); }
   #msg.err { color: var(--danger); }
@@ -73,17 +98,39 @@
   <span id="state" class="pill">Connecting…</span>
   <span id="count" class="pill" hidden></span>
   <span class="spacer"></span>
-  <a class="nav-link" href="/editor">Prepare a picture</a>
+  <a class="nav-link" href="/editor">Editor</a>
   <button id="refresh">Refresh</button>
 </header>
 <main>
   <div id="drop">
-    <button id="pick" class="primary">Upload pictures</button>
-    <span class="hint">or drop image files here</span>
-    <span class="spacer"></span>
-    <label><input type="checkbox" id="crop" checked> Crop to fill the screen (16:9)</label>
-    <label><input type="checkbox" id="show"> Display after upload</label>
-    <input type="file" id="files" accept="image/*" multiple hidden>
+    <button id="pick" class="primary">Choose a picture</button>
+    <span class="hint">or drop a picture or a link here (JPEG, PNG, WEBP or BMP, up to 50 MB)</span>
+    <form id="link-form">
+      <input type="url" id="link" placeholder="Paste a picture link" aria-label="Picture link" required>
+      <button>Fetch</button>
+    </form>
+    <input type="file" id="files" accept="image/jpeg,image/png,image/webp,image/bmp" hidden>
+  </div>
+  <div id="staged" hidden>
+    <div class="thumb"><img id="staged-img" alt="Picture ready to add"></div>
+    <div class="staged-body">
+      <div class="staged-head">
+        <span id="staged-name"></span>
+        <button id="cancel">Cancel</button>
+      </div>
+      <div class="choices">
+        <div class="choice">
+          <button id="send" class="primary go">Send to TV</button>
+          <span class="hint">Fitted automatically and sent as it is.</span>
+          <label><input type="checkbox" id="crop" checked> Crop to fill the screen (16:9)</label>
+          <label><input type="checkbox" id="show"> Display after sending</label>
+        </div>
+        <div class="choice">
+          <a id="fit" class="nav-link go" href="/editor">Custom fit</a>
+          <span class="hint">Choose the crop yourself, keep the whole picture with bars, or pair it with a second one.</span>
+        </div>
+      </div>
+    </div>
   </div>
   <div id="msg"></div>
   <div id="grid"></div>
@@ -92,6 +139,8 @@
 const $ = id => document.getElementById(id);
 const grid = $('grid'), msg = $('msg'), state = $('state'), count = $('count');
 let busy = false;
+// The one picture waiting for a choice between Send to TV and Custom fit.
+let staged = null;
 
 function say(text, isError = false) {
   msg.textContent = text;
@@ -101,13 +150,21 @@ function say(text, isError = false) {
 async function api(path, options) {
   const res = await fetch(path, options);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.detail || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const error = new Error(typeof body.detail === 'string' ? body.detail : `Request failed (${res.status})`);
+    error.status = res.status;
+    throw error;
+  }
   return body;
 }
 
+const json = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
 function setBusy(value) {
   busy = value;
-  document.querySelectorAll('button').forEach(b => b.disabled = value);
+  document.querySelectorAll('button').forEach(b => b.disabled = value || b.classList.contains('is-current'));
+  // A link cannot be disabled, so its click is refused below while busy.
+  $('fit').classList.toggle('busy', value);
 }
 
 async function load() {
@@ -162,6 +219,7 @@ function render(data) {
     const set = document.createElement('button');
     set.textContent = isCurrent ? 'Current' : 'Set as art';
     set.disabled = isCurrent;
+    set.classList.toggle('is-current', isCurrent);
     set.onclick = () => select(item.id);
     const del = document.createElement('button');
     del.className = 'danger';
@@ -202,39 +260,97 @@ function remove(id) {
   });
 }
 
-function upload(files) {
-  files = [...files].filter(f => f.type.startsWith('image/'));
-  if (!files.length) return;
-  run('', async () => {
-    let done = 0;
-    const failed = [];
-    for (const [i, file] of files.entries()) {
-      say(`Uploading ${i + 1} of ${files.length}: ${file.name}`);
-      const form = new FormData();
-      form.append('file', file);
-      form.append('crop', $('crop').checked);
-      // Only the last picture of a batch is put on display.
-      form.append('show', $('show').checked && i === files.length - 1);
-      try {
-        await api('/api/art', { method: 'POST', body: form });
-        done++;
-      } catch (e) {
-        failed.push(`${file.name}: ${e.message}`);
-      }
-    }
-    if (failed.length) throw new Error(`Uploaded ${done} of ${files.length}. Failed: ${failed.join('; ')}`);
-    return `Uploaded ${done} picture${done === 1 ? '' : 's'}.`;
+function showStaged(source) {
+  staged = source;
+  $('staged').hidden = !source;
+  if (!source) {
+    $('staged-img').removeAttribute('src');
+    return;
+  }
+  $('staged-img').src = source.url;
+  $('staged-name').textContent = `${source.original_filename} · ${source.width}×${source.height}`;
+  $('fit').href = '/editor?' + new URLSearchParams({ source: source.filename, name: source.original_filename });
+}
+
+// Staging only talks to this server, so unlike run() it does not reload the gallery from the TV.
+async function stage(label, request, note = '') {
+  if (busy) return;
+  setBusy(true);
+  say(label);
+  try {
+    showStaged(await request());
+    say(note);
+  } catch (e) {
+    say(e.message, true);
+  }
+  setBusy(false);
+}
+
+function stageFile(file, note) {
+  stage(`Uploading ${file.name}…`, () => {
+    const form = new FormData();
+    form.append('file', file);
+    return api('/api/editor/upload', { method: 'POST', body: form });
+  }, note);
+}
+
+// Spaces and accented characters are encoded the way the address bar would, so the server can ask for them.
+function encodedLink(url) {
+  try { return new URL(url).href; } catch { return url; }
+}
+
+function stageLink(url) {
+  stage('Fetching the picture…', async () => {
+    const source = await api('/api/editor/fetch', json({ url: encodedLink(url) }));
+    $('link').value = '';
+    return source;
   });
 }
 
+function send() {
+  const source = staged;
+  run('Sending to the TV…', async () => {
+    const r = await api(`/api/editor/source/${source.filename}/send`, json({ crop: $('crop').checked, show: $('show').checked })).catch(e => {
+      // Working files are only kept for a day, so a card left open that long has nothing behind it.
+      if (e.status !== 404) throw e;
+      showStaged(null);
+      throw new Error('That picture is no longer here. Please add it again.');
+    });
+    // It is on the TV now, so the card goes even if the display step did not work.
+    showStaged(null);
+    if (r.warning) throw new Error(r.warning);
+    if (r.shown) return 'Sent. It is on display now.';
+    if (r.selected) return 'Sent and selected. Art Mode is off, so it was not put on screen.';
+    return 'Sent to the TV.';
+  });
+}
+
+function dropped(data) {
+  const files = [...data.files].filter(f => f.type.startsWith('image/'));
+  if (files.length) {
+    stageFile(files[0], files.length > 1 ? `One picture at a time: using ${files[0].name}.` : '');
+    return;
+  }
+  // A link, or a picture dragged out of another browser tab.
+  const lines = (data.getData('text/uri-list') || data.getData('text/plain')).split(/\r?\n/);
+  const url = lines.map(line => line.trim()).find(line => /^https?:\/\//i.test(line));
+  if (url) stageLink(url);
+  else say('Drop a picture file or a link to one.', true);
+}
+
 $('pick').onclick = () => $('files').click();
-$('files').onchange = e => { upload(e.target.files); e.target.value = ''; };
+$('files').onchange = e => { if (e.target.files.length) stageFile(e.target.files[0]); e.target.value = ''; };
+$('link-form').onsubmit = e => { e.preventDefault(); stageLink($('link').value.trim()); };
+$('send').onclick = send;
+$('fit').onclick = e => { if (busy) e.preventDefault(); };
+$('cancel').onclick = () => { showStaged(null); say(''); };
+$('staged-img').onerror = () => { if (staged) say('Could not display that picture.', true); };
 $('refresh').onclick = () => { say(''); load(); };
 
 const drop = $('drop');
 ['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
-drop.addEventListener('drop', e => upload(e.dataTransfer.files));
+drop.addEventListener('drop', e => dropped(e.dataTransfer));
 
 load();
 </script>

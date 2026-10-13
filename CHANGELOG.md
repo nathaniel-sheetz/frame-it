@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.2.0.0] - 2026-10-13
+
+### Added
+
+- Add a picture from a link. Paste or drop a link in the gallery, or paste one
+  into either picture slot of the editor, and the server downloads it.
+- The gallery now stages one picture at a time and offers a choice: "Send to TV"
+  with the automatic fit, or "Custom fit" to open the same picture in the
+  editor without uploading it again.
+- `POST /api/editor/fetch` downloads a source from a link and answers like
+  `upload`. `POST /api/editor/source/{name}/send` sends a stored source to the
+  TV with the automatic fit (`crop`, `show`).
+- Link downloads are limited to `http` and `https` addresses on the public
+  internet. This computer, the home network (including its own IPv6 network)
+  and addresses that only look public are refused, on the first address and
+  after every redirect. Proxy settings are ignored.
+- Link downloads stop at 50 MB and at 30 seconds. A web page, a download cut
+  short and an error from the site each get their own message.
+- Tests for the downloader (`tests/test_fetch.py`) and the new routes.
+
+### Changed
+
+- The gallery adds one picture at a time; the multi-file quick upload is gone.
+- Pictures added from the gallery must be JPEG, PNG, WEBP or BMP and at most
+  50 MB, the same as the editor. GIF, TIFF and other formats that the old quick
+  upload accepted are now refused.
+- The gallery's link to the editor is labelled "Editor".
+- In the editor, a picture that arrives after another one was chosen, or after
+  the second picture was cancelled, is ignored instead of replacing it.
+- Working files are also cleared out on each fetch.
+
 ## [0.1.0.0] - 2026-10-12
 
 ### Added
