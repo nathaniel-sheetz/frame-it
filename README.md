@@ -3,11 +3,17 @@
 A small web app for managing the "My Photos" artwork on a Samsung Frame TV from
 any browser on the same network.
 
-- **Gallery** (`/`): see what is on the TV, set the current art, remove pictures,
-  and quick-upload with an automatic centre crop.
+- **Gallery** (`/`): see what is on the TV, set the current art, and remove
+  pictures. Add a picture (JPEG, PNG, WEBP or BMP) from a file or a link, then
+  choose: **Send to TV** with an automatic centre crop, or **Custom fit** to
+  open it in the editor.
 - **Editor** (`/editor`): crop a picture for the Frame's 3840×2160 panel, with
   optional letterboxing or a side-by-side pair, review the result, and send it
-  straight to the TV.
+  straight to the TV. Pictures can come from a file or a link here too.
+
+Links are downloaded by the server, so it only follows `http` and `https`
+addresses on the public internet (not this computer or the home network), and
+gives up on anything over 50 MB or slower than 30 seconds.
 
 Built on [NickWaterton/samsung-tv-ws-api](https://github.com/NickWaterton/samsung-tv-ws-api).
 The editor is ported from [image_crop_upscale](https://github.com/nathaniel-sheetz/image_crop_upscale).
@@ -45,13 +51,15 @@ is saved to `tv-token.txt`.
 | POST | `/api/art/{id}/select` | Set as current art |
 | DELETE | `/api/art/{id}` | Remove from the TV |
 | POST | `/api/editor/upload` | Upload a source picture to edit (`file` form field, max 50 MB) |
-| GET | `/api/editor/source/{name}` | The uploaded source |
+| POST | `/api/editor/fetch` | Download a source picture from a link (`url`); same answer as `upload` |
+| GET | `/api/editor/source/{name}` | The uploaded or fetched source |
+| POST | `/api/editor/source/{name}/send` | Send a source to the TV with the automatic fit, skipping the editor (`crop`, `show`) |
 | POST | `/api/editor/process` | Crop and scale (`filename`, `crop`, `letterbox`, `preset`, `original_filename`) |
 | POST | `/api/editor/process-diptych` | Two crops side by side (`filename1/2`, `crop1/2`, `gap_percent`, `preset`, `original_filename1/2`) |
 | GET | `/api/editor/result/{name}` | The processed JPEG; add `?download=1&name=...` to download |
 | POST | `/api/editor/result/{name}/send` | Send the processed JPEG to the TV unchanged (`show`) |
 
-Editor working files live in `data/editor/`; files older than 24 hours are removed at startup and on each upload.
+Editor working files live in `data/editor/`; files older than 24 hours are removed at startup and on each upload or fetch.
 
 ## Tests
 

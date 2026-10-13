@@ -27,6 +27,11 @@ function initialState() {
 
 let state = initialState();
 
+// Counted up each time a first or a second picture is asked for, so an answer
+// that arrives after the user has moved on to another one is dropped.
+let sourceRequest = 0;
+let secondRequest = 0;
+
 function errorText(data, fallback) {
     if (typeof data.detail === 'string') {
         return data.detail;
@@ -51,6 +56,8 @@ async function readJson(response) {
 const uploadArea = document.getElementById('upload-area');
 const fileInput = document.getElementById('file-input');
 const uploadStatus = document.getElementById('upload-status');
+const linkForm = document.getElementById('link-form');
+const linkInput = document.getElementById('link-input');
 const cropSection = document.getElementById('crop-section');
 const cropImage = document.getElementById('crop-image');
 const cropInfo = document.getElementById('crop-info');
@@ -76,6 +83,8 @@ const diptychCancelBtn = document.getElementById('diptych-cancel-btn');
 const uploadArea2 = document.getElementById('upload-area-2');
 const fileInput2 = document.getElementById('file-input-2');
 const uploadStatus2 = document.getElementById('upload-status-2');
+const linkForm2 = document.getElementById('link-form-2');
+const linkInput2 = document.getElementById('link-input-2');
 const diptychCropSection = document.getElementById('diptych-crop-section');
 const cropImage2 = document.getElementById('crop-image-2');
 const cropInfo2 = document.getElementById('crop-info-2');
@@ -95,6 +104,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeDownload();
     initializeSend();
     initializeDiptych();
+    loadSourceFromQuery();
 });
 
 // Upload functionality
@@ -104,6 +114,9 @@ function initializeUpload() {
 
     // File selection
     fileInput.addEventListener('change', handleFileSelect);
+
+    // Paste a link
+    linkForm.addEventListener('submit', handleLink);
 
     // Drag and drop
     uploadArea.addEventListener('dragover', (e) => {
@@ -149,6 +162,7 @@ async function handleFile(file) {
         return;
     }
 
+    const request = ++sourceRequest;
     showUploadStatus('Uploading...', 'loading');
 
     // Upload file
@@ -163,39 +177,128 @@ async function handleFile(file) {
 
         const data = await readJson(response);
 
+        if (request !== sourceRequest) {
+            return;
+        }
         if (data.success) {
-            // Reset any existing state from previous image
-            if (state.cropper) {
-                state.cropper.destroy();
-                state.cropper = null;
-            }
-            if (state.diptychMode) {
-                resetDiptychState();
-            }
-
-            // Hide sections from previous workflow
-            cropSection.style.display = 'none';
-            processSection.style.display = 'none';
-            downloadSection.style.display = 'none';
-
-            // Reset button states
-            processBtn.disabled = false;
-            processStatus.textContent = '';
-
-            // Update state with new image
-            state.uploadedFilename = data.filename;
-            state.originalFilename = data.original_filename;
-            state.uploadedImageUrl = data.url;
-
-            showUploadStatus(`Uploaded successfully! (${data.width} × ${data.height})`, 'success');
-
-            initializeCropper();
+            useSource(data, `Uploaded successfully! (${data.width} × ${data.height})`);
         } else {
             showUploadStatus(errorText(data, 'Upload failed'), 'error');
         }
     } catch (error) {
-        showUploadStatus('Upload failed: ' + error.message, 'error');
+        if (request === sourceRequest) {
+            showUploadStatus('Upload failed: ' + error.message, 'error');
+        }
     }
+}
+
+// Start editing a source the server already holds: an upload, a fetched link,
+// or one handed over by the gallery.
+function useSource(data, message) {
+    // Reset any existing state from previous image
+    if (state.cropper) {
+        state.cropper.destroy();
+        state.cropper = null;
+    }
+    if (state.diptychMode) {
+        resetDiptychState();
+    }
+
+    // Hide sections from previous workflow
+    cropSection.style.display = 'none';
+    processSection.style.display = 'none';
+    downloadSection.style.display = 'none';
+
+    // Reset button states
+    processBtn.disabled = false;
+    processStatus.textContent = '';
+
+    // Update state with new image
+    state.uploadedFilename = data.filename;
+    state.originalFilename = data.original_filename;
+    state.uploadedImageUrl = data.url;
+
+    showUploadStatus(message, 'success');
+
+    initializeCropper();
+}
+
+// Spaces and accented characters are encoded the way the address bar would,
+// so the server can ask for them.
+function encodedLink(value) {
+    try {
+        return new URL(value.trim()).href;
+    } catch (error) {
+        return value.trim();
+    }
+}
+
+// The server downloads the link; the answer has the same shape as an upload.
+async function fetchLink(url) {
+    const response = await fetch('/api/editor/fetch', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ url: encodedLink(url) })
+    });
+    return readJson(response);
+}
+
+// A download can take a while, so the form is off until it is over.
+function setLinkFormBusy(form, busy) {
+    form.querySelectorAll('input, button').forEach((element) => {
+        element.disabled = busy;
+    });
+}
+
+async function handleLink(e) {
+    e.preventDefault();
+    const request = ++sourceRequest;
+    const url = linkInput.value;
+    setLinkFormBusy(linkForm, true);
+    showUploadStatus('Fetching...', 'loading');
+
+    try {
+        const data = await fetchLink(url);
+
+        if (request !== sourceRequest) {
+            return;
+        }
+        if (data.success) {
+            linkInput.value = '';
+            useSource(data, `Fetched successfully! (${data.width} × ${data.height})`);
+        } else {
+            showUploadStatus(errorText(data, 'Fetch failed'), 'error');
+        }
+    } catch (error) {
+        if (request === sourceRequest) {
+            showUploadStatus('Fetch failed: ' + error.message, 'error');
+        }
+    } finally {
+        setLinkFormBusy(linkForm, false);
+    }
+}
+
+// The gallery's "Custom fit" opens this page as /editor?source=<name>&name=<original name>.
+function loadSourceFromQuery() {
+    const params = new URLSearchParams(window.location.search);
+    const filename = params.get('source');
+    if (!filename) {
+        return;
+    }
+    // Removed from the address so a reload starts clean, as it does after an upload.
+    history.replaceState(null, '', window.location.pathname);
+
+    // Only the names the server issues; anything else is not put into a URL.
+    if (!/^[0-9a-f]{32}\.(jpg|png|webp|bmp)$/.test(filename)) {
+        return;
+    }
+    useSource({
+        filename: filename,
+        original_filename: params.get('name') || 'image.jpg',
+        url: `/api/editor/source/${filename}`
+    }, 'Picture ready.');
 }
 
 function showUploadStatus(message, type) {
@@ -259,7 +362,10 @@ function initializeCropper() {
     cropImage.src = state.uploadedImageUrl;
     cropImage.decode().then(createCropper).catch(() => {
         if (cropImage.src.endsWith(state.uploadedImageUrl)) {
-            showUploadStatus('Could not display that picture.', 'error');
+            // Also what an expired source handed over by the gallery looks like.
+            showUploadStatus('Could not display that picture. Please choose it again.', 'error');
+            cropSection.style.display = 'none';
+            processSection.style.display = 'none';
         }
     });
 }
@@ -479,9 +585,12 @@ function initializeDownload() {
 
         // Reset state
         state = initialState();
+        sourceRequest++;
+        secondRequest++;
 
         // Reset UI
         fileInput.value = '';
+        linkInput.value = '';
         uploadStatus.textContent = '';
         cropSection.style.display = 'none';
         processSection.style.display = 'none';
@@ -506,6 +615,7 @@ function initializeDownload() {
         gapPxDisplay.textContent = '~38px';
         uploadStatus2.textContent = '';
         fileInput2.value = '';
+        linkInput2.value = '';
 
         // Scroll to top
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -542,6 +652,9 @@ function initializeDiptych() {
             e.target.value = '';
         }
     });
+
+    // Paste a link for the second picture
+    linkForm2.addEventListener('submit', handleLink2);
 
     // Gap slider
     gapSlider.addEventListener('input', function() {
@@ -604,6 +717,7 @@ async function handleFile2(file) {
         return;
     }
 
+    const request = ++secondRequest;
     uploadStatus2.className = 'loading';
     uploadStatus2.textContent = 'Uploading...';
 
@@ -618,22 +732,62 @@ async function handleFile2(file) {
 
         const data = await readJson(response);
 
+        if (request !== secondRequest) {
+            return;
+        }
         if (data.success) {
-            state.image2UploadedFilename = data.filename;
-            state.image2OriginalFilename = data.original_filename;
-            state.image2ImageUrl = data.url;
-
-            uploadStatus2.className = 'success';
-            uploadStatus2.textContent = `Uploaded successfully! (${data.width} × ${data.height})`;
-
-            initializeCropper2();
+            useSecondSource(data, `Uploaded successfully! (${data.width} × ${data.height})`);
         } else {
             uploadStatus2.className = 'error';
             uploadStatus2.textContent = errorText(data, 'Upload failed');
         }
     } catch (error) {
-        uploadStatus2.className = 'error';
-        uploadStatus2.textContent = 'Upload failed: ' + error.message;
+        if (request === secondRequest) {
+            uploadStatus2.className = 'error';
+            uploadStatus2.textContent = 'Upload failed: ' + error.message;
+        }
+    }
+}
+
+function useSecondSource(data, message) {
+    state.image2UploadedFilename = data.filename;
+    state.image2OriginalFilename = data.original_filename;
+    state.image2ImageUrl = data.url;
+
+    uploadStatus2.className = 'success';
+    uploadStatus2.textContent = message;
+
+    initializeCropper2();
+}
+
+async function handleLink2(e) {
+    e.preventDefault();
+    const request = ++secondRequest;
+    const url = linkInput2.value;
+    setLinkFormBusy(linkForm2, true);
+    uploadStatus2.className = 'loading';
+    uploadStatus2.textContent = 'Fetching...';
+
+    try {
+        const data = await fetchLink(url);
+
+        if (request !== secondRequest) {
+            return;
+        }
+        if (data.success) {
+            linkInput2.value = '';
+            useSecondSource(data, `Fetched successfully! (${data.width} × ${data.height})`);
+        } else {
+            uploadStatus2.className = 'error';
+            uploadStatus2.textContent = errorText(data, 'Fetch failed');
+        }
+    } catch (error) {
+        if (request === secondRequest) {
+            uploadStatus2.className = 'error';
+            uploadStatus2.textContent = 'Fetch failed: ' + error.message;
+        }
+    } finally {
+        setLinkFormBusy(linkForm2, false);
     }
 }
 
@@ -725,6 +879,8 @@ function resetDiptychState() {
         state.cropper2.destroy();
         state.cropper2 = null;
     }
+    // A second picture still on its way is no longer wanted.
+    secondRequest++;
     state.diptychMode = false;
     state.image2UploadedFilename = null;
     state.image2OriginalFilename = null;
@@ -738,6 +894,7 @@ function resetDiptychState() {
     diptychGapControl.style.display = 'none';
     uploadStatus2.textContent = '';
     fileInput2.value = '';
+    linkInput2.value = '';
     letterboxToggle.disabled = false;
 }
 

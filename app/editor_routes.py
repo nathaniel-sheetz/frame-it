@@ -1,4 +1,4 @@
-"""HTTP API for the picture editor: upload a source, process it, send the result to the TV."""
+"""HTTP API for the picture editor: bring in a source, process it, send the result to the TV."""
 import io
 import logging
 import re
@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
-from . import editor
+from . import editor, fetch, images
 from .tv import TVUnavailable
 
 log = logging.getLogger(__name__)
@@ -53,6 +53,15 @@ class DiptychRequest(BaseModel):
 
 
 class SendRequest(BaseModel):
+    show: bool = False
+
+
+class FetchRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class SourceSendRequest(BaseModel):
+    crop: bool = True
     show: bool = False
 
 
@@ -114,19 +123,16 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
             "download_url": f"/api/editor/result/{output.name}?download=1",
         }
 
-    @router.post("/upload")
-    def upload(file: UploadFile = File(...)):
-        data = file.file.read(MAX_UPLOAD_BYTES + 1)
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, "File too large. Maximum size is 50MB.")
+    def store(data: bytes, original_filename: str, refusal: str = "Invalid file type") -> dict:
+        """Check that the bytes are a picture the editor accepts and keep them as a source."""
         try:
             with Image.open(io.BytesIO(data), formats=["JPEG", "PNG", "WEBP", "BMP"]) as img:
                 extension = FORMATS.get(img.format)
                 if not extension:
-                    raise HTTPException(400, "Invalid file type")
+                    raise HTTPException(400, refusal)
                 width, height = ImageOps.exif_transpose(img).size
         except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError):
-            raise HTTPException(400, "Invalid file type")
+            raise HTTPException(400, refusal)
 
         _sweep(upload_dir)
         _sweep(processed_dir)
@@ -135,15 +141,57 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
         return {
             "success": True,
             "filename": name,
-            "original_filename": file.filename or "image.jpg",
+            "original_filename": original_filename,
             "width": width,
             "height": height,
             "url": f"/api/editor/source/{name}",
         }
 
+    def deliver(data: bytes, show: bool) -> dict:
+        try:
+            content_id = tv.upload(data)
+        except TVUnavailable as e:
+            raise HTTPException(503, str(e))
+        if not content_id:
+            raise HTTPException(502, "The TV did not confirm the upload.")
+        sent = {"id": content_id, "selected": show, "shown": False}
+        if show:
+            try:
+                sent["shown"] = tv.select(content_id)
+            except TVUnavailable:
+                # The picture is on the TV by now, so this is not an error to retry:
+                # sending again would upload a second copy.
+                sent["selected"] = False
+                sent["warning"] = "Sent to the TV, but it could not be put on display."
+        return sent
+
+    @router.post("/upload")
+    def upload(file: UploadFile = File(...)):
+        data = file.file.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "File too large. Maximum size is 50MB.")
+        return store(data, file.filename or "image.jpg")
+
+    @router.post("/fetch")
+    def fetch_link(req: FetchRequest):
+        try:
+            data, name = fetch.fetch(req.url, MAX_UPLOAD_BYTES)
+        except fetch.FetchError as e:
+            raise HTTPException(e.status, str(e))
+        return store(data, name, "That link is not a picture this app can use (JPEG, PNG, WEBP or BMP).")
+
     @router.get("/source/{name}")
     def source(name: str):
         return FileResponse(source_path(name))
+
+    @router.post("/source/{name}/send")
+    def send_source(name: str, req: SourceSendRequest = SourceSendRequest()):
+        # The quick path, skipping the editor: the same automatic fit as POST /api/art.
+        try:
+            jpeg = images.prepare(source_path(name).read_bytes(), req.crop)
+        except images.BadImage as e:
+            raise HTTPException(400, str(e))
+        return deliver(jpeg, req.show)
 
     @router.post("/process")
     def process(req: ProcessRequest):
@@ -192,22 +240,6 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
     @router.post("/result/{filename}/send")
     def send(filename: str, req: SendRequest = SendRequest()):
         # The processed JPEG goes to the TV byte-for-byte; no second re-encode.
-        data = result_path(filename).read_bytes()
-        try:
-            content_id = tv.upload(data)
-        except TVUnavailable as e:
-            raise HTTPException(503, str(e))
-        if not content_id:
-            raise HTTPException(502, "The TV did not confirm the upload.")
-        sent = {"id": content_id, "selected": req.show, "shown": False}
-        if req.show:
-            try:
-                sent["shown"] = tv.select(content_id)
-            except TVUnavailable:
-                # The picture is on the TV by now, so this is not an error to retry:
-                # sending again would upload a second copy.
-                sent["selected"] = False
-                sent["warning"] = "Sent to the TV, but it could not be put on display."
-        return sent
+        return deliver(result_path(filename).read_bytes(), req.show)
 
     return router
