@@ -27,11 +27,50 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m app
 ```
 
-Then open `http://<this-computer's-ip>:8080`. The TV's address and the server
+Then open `http://<this-computer's-ip>:8090`. The TV's address and the server
 port are in `config.toml`.
 
 The first connection makes the TV show an "Allow" prompt; the resulting token
-is saved to `tv-token.txt`.
+is saved to `tv-token.txt`. Each computer pairs separately.
+
+## Always-on host (Mac Mini)
+
+The app runs on the Mini as a system daemon: it starts at boot with nobody
+logged in, runs as an ordinary user, and is restarted if it stops.
+
+Install, with the checkout at `~/frame_tv` (the app needs Python 3.11 or later;
+the system Python is older, so `uv` supplies one):
+
+```sh
+cd ~/frame_tv
+uv venv --python 3.13
+uv pip install -r requirements.txt -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
+Install the service. Run this from the checkout as the user the app should run
+as; the first command fills that user and path into
+`deploy/local.frame-tv.plist`.
+
+```sh
+sed -e "s|__USER__|$USER|g" -e "s|__HOME__|$HOME|g" -e "s|__CHECKOUT__|$PWD|g" deploy/local.frame-tv.plist \
+  | sudo tee /Library/LaunchDaemons/local.frame-tv.plist > /dev/null
+sudo launchctl bootstrap system /Library/LaunchDaemons/local.frame-tv.plist
+```
+
+Then open `http://<the-mini>:8090` and accept the "Allow" prompt on the TV.
+
+Update to the latest code. Stopping the app is enough to restart it, and needs
+no `sudo` because it runs as you:
+
+```sh
+cd ~/frame_tv && git pull --ff-only && uv pip install -r requirements.txt
+pkill -f "frame_tv/.venv/bin/python -m app"
+```
+
+The log is `~/Library/Logs/frame-tv.log`. To remove the service:
+`sudo launchctl bootout system/local.frame-tv`, then delete the file from
+`/Library/LaunchDaemons`.
 
 ## What it will and won't do to the TV
 
