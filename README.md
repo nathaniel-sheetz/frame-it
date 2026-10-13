@@ -40,6 +40,18 @@ An original is tagged as a building block when it is added if an automatic
 16:9 fit would cut off more than 10% of it, or if it would be under 1920 wide
 after that fit. The tag can be removed or added by hand on the library page.
 
+Tap a picture on the library page to look at it and to change its details:
+
+- **Name.** The extension stays as it is. Renaming does not rename pictures
+  already made from it.
+- **Creators** and **subjects**, as many of each as you like. Type one and
+  press Enter, or separate several with commas. Ones already in the library
+  are offered as you type.
+- A result also shows the creators and subjects of the originals it was made
+  from, with a dashed outline. Those are changed on the original.
+
+The box beside the filters finds pictures by name, creator or subject.
+
 Removing a picture from the TV, here or with the TV's remote, leaves it in the
 library. Pictures that were on the TV before the library existed show in the
 gallery as "Not in library": the TV only hands back small thumbnails, so they
@@ -150,8 +162,9 @@ The log is `~/Library/Logs/frame-tv.log`. To remove the service:
 | POST | `/api/editor/result/{name}/send` | Send the processed JPEG to the TV unchanged and keep it in the library (`show`, `name`) |
 | POST | `/api/editor/result/{name}/save` | Keep the processed JPEG in the library without sending it (`name`) |
 | GET | `/api/library` | Every library picture, the count under each filter, and disk use |
-| GET | `/api/library/{id}` | One picture, with its crop settings and originals |
-| GET | `/api/library/{id}/thumb`, `/file` | Its preview, and the picture itself |
+| GET | `/api/library/{id}` | One picture, with its crop settings and originals. `from_originals` holds the creators and subjects it takes from them |
+| PATCH | `/api/library/{id}` | Change its `name`, `creators` or `subjects`. What is left out stays as it is |
+| GET | `/api/library/{id}/thumb`, `/view`, `/file` | Its preview, a larger one (up to 1600 px, made when first asked for), and the picture itself |
 | POST | `/api/library/{id}/send` | Send to the TV (`show`). An original is sent with the automatic fit; a result already on the TV is refused |
 | POST | `/api/library/{id}/display` | Set a picture that is on the TV as current art |
 | POST | `/api/library/{id}/remove-from-tv` | Remove its copy from the TV and keep the picture |

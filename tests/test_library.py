@@ -1,7 +1,7 @@
 import io
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.library import Library, StillOnTV, is_building_block, summary
 
@@ -211,6 +211,160 @@ class TestDelete:
         image = original(library)
         library.delete(image['id'])
         assert original(library)['id'] != image['id']
+
+
+class TestRename:
+    def test_a_picture_can_be_renamed(self, library):
+        image = original(library, name='IMG_4032.jpg')
+        assert library.edit(image['id'], name='Niagara Falls')['name'] == 'Niagara Falls.jpg'
+        assert library.list()[0]['name'] == 'Niagara Falls.jpg'
+
+    @pytest.mark.parametrize('typed', ['Falls.jpg', 'Falls.JPG', '  Falls  ', 'Falls .jpg'])
+    def test_the_extension_is_kept_once(self, library, typed):
+        image = original(library, name='IMG_4032.jpg')
+        assert library.edit(image['id'], name=typed)['name'] == 'Falls.jpg'
+
+    def test_a_full_stop_in_the_name_is_not_an_extension(self, library):
+        image = original(library, name='St. Jerome in his Study')
+        assert library.edit(image['id'], name='St. Jerome')['name'] == 'St. Jerome'
+
+    @pytest.mark.parametrize('typed', ['', '   ', '.jpg'])
+    def test_a_picture_needs_a_name(self, library, typed):
+        image = original(library, name='IMG_4032.jpg')
+        with pytest.raises(ValueError):
+            library.edit(image['id'], name=typed)
+        assert library.get(image['id'])['name'] == 'IMG_4032.jpg'
+
+    def test_a_refused_name_changes_nothing_else(self, library):
+        image = original(library)
+        with pytest.raises(ValueError):
+            library.edit(image['id'], name='', creators=['Monet'])
+        assert library.get(image['id'])['creators'] == []
+
+    def test_renaming_a_picture_the_library_does_not_hold(self, library):
+        assert library.edit('0' * 32, name='Falls') is None
+
+
+class TestDetails:
+    def test_a_new_picture_has_none(self, library):
+        image = original(library)
+        assert (image['creators'], image['subjects']) == ([], [])
+        assert image['from_originals'] == {'creators': [], 'subjects': []}
+
+    def test_details_are_kept_in_the_order_given(self, library):
+        image = original(library)
+        kept = library.edit(image['id'], creators=['Claude Monet'], subjects=['water lilies', 'pond', 'bridge'])
+        assert kept['creators'] == ['Claude Monet']
+        assert kept['subjects'] == ['water lilies', 'pond', 'bridge']
+        assert Library(library.root).list()[0]['subjects'] == ['water lilies', 'pond', 'bridge']
+
+    def test_details_are_tidied(self, library):
+        image = original(library)
+        kept = library.edit(image['id'], subjects=['  water   lilies ', '', 'Pond', 'pond', ' '])
+        assert kept['subjects'] == ['water lilies', 'Pond']
+
+    def test_what_is_left_out_stays_as_it_is(self, library):
+        image = original(library, name='Falls.jpg')
+        library.edit(image['id'], creators=['Frederic Church'], subjects=['waterfall'])
+        kept = library.edit(image['id'], subjects=[])
+        assert (kept['name'], kept['creators'], kept['subjects']) == ('Falls.jpg', ['Frederic Church'], [])
+
+    def test_the_same_word_can_be_a_creator_and_a_subject(self, library):
+        image = original(library)
+        kept = library.edit(image['id'], creators=['Rembrandt'], subjects=['Rembrandt'])
+        assert (kept['creators'], kept['subjects']) == (['Rembrandt'], ['Rembrandt'])
+
+    def test_a_result_carries_the_details_of_its_original(self, library):
+        parent = original(library)
+        kept = result(library, parent)
+        # Described after the result was made, and it still shows.
+        library.edit(parent['id'], creators=['Claude Monet'], subjects=['pond'])
+        for image in (library.get(kept['id']), library.list()[0]):
+            assert (image['creators'], image['subjects']) == ([], [])
+            assert image['from_originals'] == {'creators': ['Claude Monet'], 'subjects': ['pond']}
+
+    def test_a_pair_carries_the_details_of_both_originals(self, library):
+        left, right = original(library, color='red'), original(library, color='green')
+        library.edit(left['id'], creators=['Monet'], subjects=['garden'])
+        library.edit(right['id'], creators=['Renoir'], subjects=['Garden', 'boats'])
+        pair = result(library, left, right)
+        assert pair['from_originals'] == {'creators': ['Monet', 'Renoir'], 'subjects': ['garden', 'boats']}
+
+    def test_details_come_through_a_result_that_was_edited_again(self, library):
+        first = original(library)
+        library.edit(first['id'], creators=['Hokusai'])
+        second = result(library, first, color='blue')
+        library.edit(second['id'], subjects=['wave'])
+        third = result(library, second, color='green')
+        assert third['from_originals'] == {'creators': ['Hokusai'], 'subjects': ['wave']}
+
+    def test_a_detail_the_result_has_itself_is_not_repeated(self, library):
+        parent = original(library)
+        library.edit(parent['id'], subjects=['pond', 'bridge'])
+        kept = library.edit(result(library, parent)['id'], subjects=['Bridge', 'evening'])
+        assert kept['subjects'] == ['Bridge', 'evening']
+        assert kept['from_originals']['subjects'] == ['pond']
+
+    def test_an_original_does_not_take_details_from_what_was_made_from_it(self, library):
+        parent = original(library)
+        library.edit(result(library, parent)['id'], subjects=['detail'])
+        assert library.get(parent['id'])['from_originals'] == {'creators': [], 'subjects': []}
+
+    def test_a_deleted_original_takes_its_details_with_it(self, library):
+        parent = original(library)
+        library.edit(parent['id'], creators=['Monet'])
+        kept = library.edit(result(library, parent)['id'], subjects=['pond'])
+        library.delete(parent['id'])
+        left = library.get(kept['id'])
+        assert (left['subjects'], left['from_originals']['creators']) == (['pond'], [])
+
+    def test_a_library_from_before_details_takes_them(self, library):
+        image = original(library)
+        with library._db() as db:
+            db.execute('DROP TABLE details')
+        reopened = Library(library.root)
+        assert reopened.edit(image['id'], creators=['Monet'])['creators'] == ['Monet']
+
+
+class TestView:
+    def test_a_large_picture_is_shrunk_for_looking_at(self, library):
+        image = original(library, 4000, 3000)
+        with Image.open(library.view_path(image)) as view:
+            assert (view.format, view.size) == ('JPEG', (1600, 1200))
+
+    def test_a_small_picture_is_not_enlarged(self, library):
+        image = original(library, 800, 600)
+        with Image.open(library.view_path(image)) as view:
+            assert view.size == (800, 600)
+
+    def test_it_is_turned_the_way_the_picture_is_displayed(self, library):
+        buf = io.BytesIO()
+        exif = Image.Exif()
+        exif[0x0112] = 6  # Orientation: shown rotated a quarter turn
+        Image.new('RGB', (2000, 1000)).save(buf, format='JPEG', exif=exif)
+        data = buf.getvalue()
+        with Image.open(io.BytesIO(data)) as img:
+            image = library.add_original(data, 'turned.jpg', 'jpg', ImageOps.exif_transpose(img), 'upload')
+        with Image.open(library.view_path(image)) as view:
+            assert view.size == (800, 1600)
+
+    def test_it_is_made_once(self, library):
+        image = original(library, 4000, 3000)
+        path = library.view_path(image)
+        path.write_bytes(b'kept')
+        assert library.view_path(image).read_bytes() == b'kept'
+
+    def test_it_goes_when_the_picture_is_deleted(self, library):
+        image = original(library, 4000, 3000)
+        path = library.view_path(image)
+        library.delete(image['id'])
+        assert not path.exists()
+
+    def test_a_picture_whose_file_is_missing(self, library):
+        image = original(library)
+        library.path(image['file']).unlink()
+        with pytest.raises(OSError):
+            library.view_path(image)
 
 
 def test_summary_counts_each_filter_and_the_disk_space(library):

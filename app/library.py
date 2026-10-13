@@ -6,6 +6,7 @@ is told when that changes.
 import hashlib
 import io
 import json
+import re
 import sqlite3
 import threading
 import uuid
@@ -13,10 +14,14 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 BUILDING_BLOCK = "building-block"
 THUMB_SIZE = (480, 480)
+# Large enough to look at on a phone or in a popup, without sending the whole file.
+VIEW_SIZE = (1600, 1600)
+# What a picture can be described by, and the name each list goes by.
+DETAILS = {"creator": "creators", "subject": "subjects"}
 # An automatic fit that keeps less than this much of a picture means it needs work first.
 MIN_KEPT = 0.90
 # Narrower than this after the fit, a picture is stretched more than 2x to fill the screen.
@@ -50,6 +55,12 @@ CREATE TABLE IF NOT EXISTS tags (
     tag TEXT NOT NULL,
     PRIMARY KEY (image_id, tag)
 );
+CREATE TABLE IF NOT EXISTS details (
+    image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('creator', 'subject')),
+    value TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (image_id, kind, value)
+);
 CREATE TABLE IF NOT EXISTS tv_copies (
     id INTEGER PRIMARY KEY,
     image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
@@ -59,6 +70,20 @@ CREATE TABLE IF NOT EXISTS tv_copies (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS tv_copies_open ON tv_copies(content_id) WHERE removed_at IS NULL;
 """
+
+# The details of everything a picture was made from, however many steps back.
+_MADE_FROM = """
+WITH RECURSIVE made_from(image_id, ancestor) AS (
+    SELECT image_id, parent_id FROM parents WHERE parent_id IS NOT NULL{only}
+    UNION
+    SELECT m.image_id, p.parent_id FROM made_from m JOIN parents p ON p.image_id = m.ancestor
+    WHERE p.parent_id IS NOT NULL
+)
+SELECT m.image_id, d.kind, d.value FROM made_from m JOIN details d ON d.image_id = m.ancestor
+ORDER BY d.rowid
+"""
+
+_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
 
 
 class StillOnTV(Exception):
@@ -76,12 +101,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _thumbnail(image: Image.Image) -> bytes:
-    """A small JPEG of the picture. Shrinks the image it is given."""
-    image.thumbnail(THUMB_SIZE)
+def _jpeg(image: Image.Image, size: tuple[int, int], quality: int) -> bytes:
+    """A JPEG of the picture no larger than `size`. Shrinks the image it is given."""
+    image.thumbnail(size)
     out = io.BytesIO()
-    image.convert("RGB").save(out, format="JPEG", quality=80)
+    image.convert("RGB").save(out, format="JPEG", quality=quality)
     return out.getvalue()
+
+
+def _thumbnail(image: Image.Image) -> bytes:
+    return _jpeg(image, THUMB_SIZE, 80)
+
+
+def _distinct(values: list[str]) -> list[str]:
+    """Tidied values in the order given, without blanks or the same one twice in other capitals."""
+    kept, seen = [], set()
+    for value in values:
+        value = " ".join(value.split())
+        if value and value.casefold() not in seen:
+            seen.add(value.casefold())
+            kept.append(value)
+    return kept
 
 
 class Library:
@@ -89,7 +129,8 @@ class Library:
         self.root = Path(root)
         self.files = self.root / "files"
         self.thumbs = self.root / "thumbs"
-        for folder in (self.files, self.thumbs):
+        self.views = self.root / "views"
+        for folder in (self.files, self.thumbs, self.views):
             folder.mkdir(parents=True, exist_ok=True)
         # One writer at a time, so the same picture arriving twice at once is still one entry.
         self._lock = threading.Lock()
@@ -112,6 +153,15 @@ class Library:
 
     def thumb_path(self, image_id: str) -> Path:
         return self.thumbs / f"{image_id}.jpg"
+
+    def view_path(self, image: dict) -> Path:
+        """The picture at a size for looking at, made the first time it is asked for."""
+        path = self.views / f"{image['id']}.jpg"
+        with self._lock:
+            if not path.is_file():
+                with Image.open(self.path(image["file"])) as full:
+                    path.write_bytes(_jpeg(ImageOps.exif_transpose(full), VIEW_SIZE, 85))
+        return path
 
     def _add(self, db, image_id, data, extension, thumb, **columns) -> None:
         file = f"{image_id}.{extension}"
@@ -168,8 +218,27 @@ class Library:
                 )
             return self._get(db, image_id)
 
-    def _describe(self, row, tags: set, copies: list[str], used_in: int) -> dict:
+    def _details(self, db, image_id: str | None = None) -> tuple[dict, dict]:
+        """Each picture's own details, and those of what it was made from, by id then kind.
+
+        For one picture when `image_id` is given, otherwise for all of them.
+        """
+        only = (image_id,) if image_id else ()
+        own, inherited = {}, {}
+        for r in db.execute(
+                f"SELECT image_id, kind, value FROM details{' WHERE image_id = ?' if image_id else ''} ORDER BY rowid", only):
+            own.setdefault(r["image_id"], {}).setdefault(r["kind"], []).append(r["value"])
+        for r in db.execute(_MADE_FROM.format(only=" AND image_id = ?" if image_id else ""), only):
+            inherited.setdefault(r["image_id"], {}).setdefault(r["kind"], []).append(r["value"])
+        return own, inherited
+
+    def _describe(self, row, tags: set, copies: list[str], used_in: int, own: dict, inherited: dict) -> dict:
         tagged = BUILDING_BLOCK in tags
+        details = {"from_originals": {}}
+        for kind, field in DETAILS.items():
+            details[field] = own.get(kind, [])
+            # A detail the picture has itself is not listed again as coming from its original.
+            details["from_originals"][field] = _distinct(details[field] + inherited.get(kind, []))[len(details[field]):]
         if copies:
             status = "on-tv"
         elif tagged:
@@ -193,6 +262,7 @@ class Library:
             "building_block": tagged,
             "tv": copies,
             "used_in": used_in,
+            **details,
         }
 
     def _get(self, db, image_id: str) -> dict | None:
@@ -203,7 +273,8 @@ class Library:
         copies = [r["content_id"] for r in db.execute(
             "SELECT content_id FROM tv_copies WHERE image_id = ? AND removed_at IS NULL ORDER BY id", (image_id,))]
         used_in = db.execute("SELECT COUNT(*) FROM parents WHERE parent_id = ?", (image_id,)).fetchone()[0]
-        image = self._describe(row, tags, copies, used_in)
+        own, inherited = self._details(db, image_id)
+        image = self._describe(row, tags, copies, used_in, own.get(image_id, {}), inherited.get(image_id, {}))
         image["recipe"] = json.loads(row["recipe"]) if row["recipe"] else None
         image["parents"] = [
             {
@@ -233,10 +304,38 @@ class Library:
                 copies.setdefault(r["image_id"], []).append(r["content_id"])
             for r in db.execute("SELECT parent_id, COUNT(*) AS n FROM parents WHERE parent_id IS NOT NULL GROUP BY parent_id"):
                 used_in[r["parent_id"]] = r["n"]
+            own, inherited = self._details(db)
             return [
-                self._describe(row, tags.get(row["id"], set()), copies.get(row["id"], []), used_in.get(row["id"], 0))
+                self._describe(row, tags.get(row["id"], set()), copies.get(row["id"], []), used_in.get(row["id"], 0),
+                               own.get(row["id"], {}), inherited.get(row["id"], {}))
                 for row in db.execute("SELECT * FROM images ORDER BY added_at DESC, rowid DESC")
             ]
+
+    def edit(self, image_id: str, name: str | None = None, creators: list[str] | None = None,
+             subjects: list[str] | None = None) -> dict | None:
+        """Rename a picture, or say who made it and what it shows. Anything left as None stays as it is."""
+        with self._db() as db:
+            row = db.execute("SELECT name FROM images WHERE id = ?", (image_id,)).fetchone()
+            if not row:
+                return None
+            if name is not None:
+                # Names of pictures made from this one are built from the part before
+                # the extension, so the extension stays whatever is typed.
+                extension = _EXTENSION.search(row["name"])
+                extension = extension.group() if extension else ""
+                name = " ".join(name.split())
+                if extension and name.lower().endswith(extension.lower()):
+                    name = name[:-len(extension)].rstrip()
+                if not name:
+                    raise ValueError("A picture needs a name.")
+                db.execute("UPDATE images SET name = ? WHERE id = ?", (name + extension, image_id))
+            for kind, values in (("creator", creators), ("subject", subjects)):
+                if values is None:
+                    continue
+                db.execute("DELETE FROM details WHERE image_id = ? AND kind = ?", (image_id, kind))
+                db.executemany("INSERT INTO details (image_id, kind, value) VALUES (?, ?, ?)",
+                               [(image_id, kind, value) for value in _distinct(values)])
+            return self._get(db, image_id)
 
     def tag(self, image_id: str) -> None:
         with self._db() as db:
@@ -292,6 +391,7 @@ class Library:
             db.execute("DELETE FROM images WHERE id = ?", (image_id,))
             self.path(row["file"]).unlink(missing_ok=True)
             self.thumb_path(image_id).unlink(missing_ok=True)
+            (self.views / f"{image_id}.jpg").unlink(missing_ok=True)
 
 
 def summary(images: list[dict]) -> dict:

@@ -115,6 +115,75 @@ class TestListing:
         assert client.get(f'/api/library/{image_id}/file').content == image_bytes(4000, 3000)
 
 
+    def test_a_larger_preview_is_served(self, client):
+        image_id = original(client, 4000, 3000)
+        view = client.get(f'/api/library/{image_id}/view')
+        assert view.headers['content-type'] == 'image/jpeg'
+        with Image.open(io.BytesIO(view.content)) as img:
+            assert img.size == (1600, 1200)
+
+    def test_a_larger_preview_of_a_picture_whose_file_is_missing(self, client, library):
+        image_id = original(client)
+        library.path(f'{image_id}.jpg').unlink()
+        assert client.get(f'/api/library/{image_id}/view').status_code == 404
+
+
+class TestEdit:
+    def test_rename(self, client):
+        image_id = original(client, name='IMG_4032.jpg')
+        resp = client.patch(f'/api/library/{image_id}', json={'name': 'Niagara Falls'})
+        assert resp.json()['name'] == 'Niagara Falls.jpg'
+        assert picture(client, image_id)['name'] == 'Niagara Falls.jpg'
+
+    def test_a_renamed_original_names_what_is_sent_from_it(self, client, tv):
+        image_id = original(client, name='IMG_4032.jpg')
+        client.patch(f'/api/library/{image_id}', json={'name': 'Falls'})
+        client.post(f'/api/library/{image_id}/send')
+        assert 'Falls_fit.jpg' in [item['name'] for item in client.get('/api/library').json()['items']]
+
+    def test_creators_and_subjects(self, client):
+        image_id = original(client)
+        body = {'creators': ['Claude Monet'], 'subjects': ['water lilies', ' pond ', 'Pond']}
+        data = client.patch(f'/api/library/{image_id}', json=body).json()
+        assert (data['creators'], data['subjects']) == (['Claude Monet'], ['water lilies', 'pond'])
+        listed = client.get('/api/library').json()['items'][0]
+        assert (listed['creators'], listed['subjects']) == (['Claude Monet'], ['water lilies', 'pond'])
+
+    def test_each_part_can_be_changed_alone(self, client):
+        image_id = original(client, name='Falls.jpg')
+        client.patch(f'/api/library/{image_id}', json={'creators': ['Church'], 'subjects': ['waterfall']})
+        client.patch(f'/api/library/{image_id}', json={'name': 'Niagara'})
+        data = client.patch(f'/api/library/{image_id}', json={'subjects': []}).json()
+        assert (data['name'], data['creators'], data['subjects']) == ('Niagara.jpg', ['Church'], [])
+
+    def test_a_result_shows_the_details_of_its_original(self, client):
+        result = saved_result(client)
+        parent = picture(client, result)['parents'][0]['id']
+        client.patch(f'/api/library/{parent}', json={'creators': ['Monet']})
+        assert picture(client, result)['from_originals'] == {'creators': ['Monet'], 'subjects': []}
+
+    def test_an_empty_name_is_refused(self, client):
+        image_id = original(client, name='Falls.jpg')
+        resp = client.patch(f'/api/library/{image_id}', json={'name': '  ', 'creators': ['Monet']})
+        assert resp.status_code == 400
+        assert resp.json()['detail'] == 'A picture needs a name.'
+        data = picture(client, image_id)
+        assert (data['name'], data['creators']) == ('Falls.jpg', [])
+
+    @pytest.mark.parametrize('body', [
+        {'name': 'x' * 201},
+        {'subjects': ['x' * 101]},
+        {'creators': ['x'] * 51},
+        {'subjects': 'pond'},
+    ])
+    def test_more_than_the_library_takes_is_refused(self, client, body):
+        image_id = original(client)
+        assert client.patch(f'/api/library/{image_id}', json=body).status_code == 422
+
+    def test_editing_an_unknown_picture(self, client):
+        assert client.patch('/api/library/' + '0' * 32, json={'name': 'Falls'}).status_code == 404
+
+
 class TestSend:
     def test_a_saved_result_is_sent_unchanged(self, client, tv, library):
         image_id = saved_result(client)

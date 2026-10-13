@@ -6,9 +6,18 @@
 <title>Library · Frame TV Art</title>
 <link rel="stylesheet" href="/static/site.css">
 <style>
-  #filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  #bar { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 16px; }
+  #filters { display: flex; flex-wrap: wrap; gap: 8px; }
   #filters button.chosen { border-color: var(--accent); color: var(--accent); }
   #filters .n { color: var(--muted); margin-left: 4px; }
+  #find { flex: 1; min-width: 220px; max-width: 420px; }
+
+  /* 16px, so a phone does not zoom the page in when a box is tapped. */
+  input[type=text], input[type=search] {
+    font: inherit; font-size: 16px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px;
+  }
+  input[type=text]:focus, input[type=search]:focus { outline: none; border-color: var(--muted); }
 
   .thumb a { display: block; height: 100%; }
   .labels { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
@@ -29,6 +38,40 @@
   }
   .more button:hover:not(:disabled) { color: var(--text); }
   .more button.danger:hover:not(:disabled) { color: var(--danger); }
+
+  dialog {
+    width: min(900px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 0; overflow: auto;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, .75); }
+  #viewer-img { display: block; width: 100%; max-height: 60vh; object-fit: contain; background: #000; }
+  #viewer form { display: grid; gap: 12px; padding: 16px; }
+  #viewer p { margin: 0; font-size: 13px; }
+  #viewer-msg { color: var(--danger); }
+  #viewer-msg:empty { display: none; }
+  .field { display: grid; gap: 4px; }
+  .field > span:first-child { font-size: 12px; color: var(--muted); }
+  .named { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .named input { flex: 1; min-width: 0; }
+  .buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .link { border: 0; padding: 0; background: none; color: var(--text); text-decoration: underline; font-size: inherit; }
+
+  .chips {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px; cursor: text;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  }
+  .chips:focus-within { border-color: var(--muted); }
+  /* The chips sit in the same wrapping row as the box for typing the next one. */
+  .chips > span { display: contents; }
+  .chips input[type=text] { flex: 1; min-width: 140px; border: 0; padding: 2px 5px; background: none; }
+  .chip {
+    display: inline-flex; align-items: center; padding: 1px 2px 1px 10px; font-size: 13px; cursor: default;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px; overflow-wrap: anywhere;
+  }
+  .chip button { border: 0; background: none; padding: 0 7px; color: var(--muted); font-size: 17px; line-height: 1.2; }
+  .chip button:hover:not(:disabled) { color: var(--danger); }
+  /* Comes from the picture this one was made from, and is changed there. */
+  .chip.fixed { padding-right: 10px; color: var(--muted); border-style: dashed; }
 </style>
 </head>
 <body>
@@ -43,19 +86,46 @@
   <input type="file" id="files" accept="image/jpeg,image/png,image/webp,image/bmp" multiple hidden>
 </header>
 <main>
-  <div id="filters"></div>
+  <div id="bar">
+    <div id="filters"></div>
+    <input type="search" id="find" placeholder="Find by name, creator or subject" aria-label="Find pictures">
+  </div>
   <div id="msg"></div>
   <div id="grid"></div>
 </main>
+<dialog id="viewer">
+  <img id="viewer-img" alt="">
+  <form id="viewer-form">
+    <label class="field">
+      <span>Name</span>
+      <span class="named"><input type="text" id="viewer-name" maxlength="190" required autocomplete="off"><span id="viewer-ext"></span></span>
+    </label>
+    <div class="field"><span>Creators</span><div class="chips" id="viewer-creators"></div></div>
+    <div class="field"><span>Subjects</span><div class="chips" id="viewer-subjects"></div></div>
+    <p id="viewer-from" class="hint" hidden></p>
+    <p id="viewer-meta" class="hint"></p>
+    <p id="viewer-msg"></p>
+    <div class="buttons">
+      <a id="viewer-full" class="nav-link" target="_blank">Open the full picture</a>
+      <span class="spacer"></span>
+      <button type="button" id="viewer-close">Close</button>
+      <button class="primary">Save</button>
+    </div>
+  </form>
+  <datalist id="known-creators"></datalist>
+  <datalist id="known-subjects"></datalist>
+</dialog>
 <script>
 const $ = id => document.getElementById(id);
 const grid = $('grid'), msg = $('msg');
 
+const viewer = $('viewer'), find = $('find');
+
 const FILTERS = [
-  { key: 'all', text: 'All', count: d => d.count, has: () => true },
-  { key: 'on-tv', text: 'On TV', count: d => d.on_tv, has: p => p.status === 'on-tv' },
-  { key: 'ready', text: 'Ready', count: d => d.ready, has: p => p.status === 'ready' },
-  { key: 'blocks', text: 'Building blocks', count: d => d.blocks, has: p => p.building_block },
+  { key: 'all', text: 'All', has: () => true },
+  { key: 'on-tv', text: 'On TV', has: p => p.status === 'on-tv' },
+  { key: 'ready', text: 'Ready', has: p => p.status === 'ready' },
+  { key: 'blocks', text: 'Building blocks', has: p => p.building_block },
 ];
 const LABELS = { 'on-tv': 'On TV', ready: 'Ready', block: 'Building block', original: 'Original' };
 
@@ -90,10 +160,26 @@ function size(bytes) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// A picture's creators or subjects: its own, then those of what it was made from.
+const described = (picture, field) => [...picture[field], ...picture.from_originals[field]];
+
+// The part of a name that renaming leaves alone. The server uses the same rule.
+const extension = name => (name.match(/\.[A-Za-z0-9]{1,5}$/) || [''])[0];
+
+function matches(picture) {
+  const text = [picture.name, ...described(picture, 'creators'), ...described(picture, 'subjects')].join('\n').toLowerCase();
+  return find.value.toLowerCase().split(/\s+/).every(word => text.includes(word));
+}
+
 async function load() {
   data = await api('/api/library');
   $('count').textContent = `${plural(data.count, 'picture')} · ${size(data.bytes)}`;
   $('count').hidden = false;
+  // Offered while typing, so the same creator or subject is spelt the same way each time.
+  for (const field of ['creators', 'subjects']) {
+    const known = [...new Set(data.items.flatMap(p => p[field]))].sort((a, b) => a.localeCompare(b));
+    $(`known-${field}`).replaceChildren(...known.map(value => new Option(value)));
+  }
   render();
 }
 
@@ -122,25 +208,27 @@ function label(text, className) {
 }
 
 function render() {
+  // The numbers on the filters count what the search box leaves.
+  const found = data.items.filter(matches);
   const filters = $('filters');
   filters.replaceChildren(...FILTERS.map(f => {
     const b = button(f.text, () => { filter = f; history.replaceState(null, '', `#${f.key}`); render(); },
       f === filter ? 'chosen' : '');
     const n = document.createElement('span');
     n.className = 'n';
-    n.textContent = f.count(data);
+    n.textContent = found.filter(f.has).length;
     b.append(n);
     return b;
   }));
 
-  const pictures = data.items.filter(filter.has);
+  const pictures = found.filter(filter.has);
   grid.replaceChildren();
   if (!pictures.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = data.count
-      ? 'No pictures under this filter.'
-      : 'Nothing in the library yet. Every picture you add here, in the gallery or in the editor is kept.';
+    empty.textContent = !data.count
+      ? 'Nothing in the library yet. Every picture you add here, in the gallery or in the editor is kept.'
+      : found.length < data.count ? 'No pictures match that under this filter.' : 'No pictures under this filter.';
     grid.append(empty);
     return;
   }
@@ -153,10 +241,16 @@ function card(picture) {
 
   const thumb = document.createElement('div');
   thumb.className = 'thumb';
+  // Still a link to the file, for a long press or a middle click. A plain tap opens the popup.
   const full = document.createElement('a');
   full.href = `/api/library/${picture.id}/file`;
   full.target = '_blank';
-  full.title = 'Open the full picture';
+  full.title = 'Look at the picture and its details';
+  full.onclick = e => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    view(picture);
+  };
   const img = document.createElement('img');
   img.loading = 'lazy';
   img.alt = picture.name;
@@ -178,6 +272,10 @@ function card(picture) {
   meta.textContent = `${picture.width}×${picture.height} · ${size(picture.bytes)}`
     + (picture.used_in ? ` · used in ${plural(picture.used_in, 'picture')}` : '');
 
+  const about = document.createElement('div');
+  about.className = 'meta';
+  about.textContent = ['creators', 'subjects'].map(field => described(picture, field).join(', ')).filter(Boolean).join(' · ');
+
   const actions = document.createElement('div');
   actions.className = 'actions';
   if (picture.status === 'on-tv') {
@@ -195,9 +293,155 @@ function card(picture) {
     : button('Mark as building block', () => setTag(picture, true)));
   if (picture.status !== 'on-tv') more.append(button('Delete', () => remove(picture), 'danger'));
 
-  el.append(thumb, name, meta, actions, more);
+  el.append(thumb, name, ...(about.textContent ? [about] : []), meta, actions, more);
   return el;
 }
+
+// A row of chips with a box for typing the next one.
+function chips(el, known, placeholder) {
+  let own = [], fixed = [];
+  const row = document.createElement('span');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = 100;
+  input.autocomplete = 'off';
+  input.placeholder = placeholder;
+  input.setAttribute('list', known);
+  el.append(row, input);
+
+  function chip(value, onremove) {
+    const span = document.createElement('span');
+    span.className = onremove ? 'chip' : 'chip fixed';
+    span.textContent = value;
+    if (onremove) {
+      const x = button('×', onremove);
+      x.type = 'button';
+      x.setAttribute('aria-label', `Remove ${value}`);
+      // Keeps the typing box from losing focus, which would redraw the chips under the press.
+      x.onmousedown = e => e.preventDefault();
+      span.append(x);
+    } else {
+      span.title = 'From the picture this was made from';
+    }
+    return span;
+  }
+
+  function draw() {
+    row.replaceChildren(
+      ...fixed.filter(value => !has(value)).map(value => chip(value)),
+      ...own.map((value, i) => chip(value, () => { own.splice(i, 1); draw(); input.focus(); })));
+  }
+
+  const has = value => own.some(v => v.toLowerCase() === value.toLowerCase());
+
+  // Turn what is in the box into chips. A comma separates one from the next.
+  function take() {
+    for (const part of input.value.split(',')) {
+      const value = part.trim().replace(/\s+/g, ' ');
+      if (value && !has(value)) own.push(value);
+    }
+    input.value = '';
+    draw();
+  }
+
+  input.oninput = () => { if (input.value.includes(',')) take(); };
+  input.onchange = take;
+  input.onkeydown = e => {
+    if (e.key === 'Enter' && input.value.trim()) {
+      // Enter in an empty box saves, like Enter in the name box.
+      e.preventDefault();
+      take();
+    } else if (e.key === 'Backspace' && !input.value && own.length) {
+      own.pop();
+      draw();
+    }
+  };
+  el.onclick = e => { if (e.target === el) input.focus(); };
+
+  return {
+    set(values, inherited) { own = [...values]; fixed = inherited; input.value = ''; draw(); },
+    read() { take(); return own; },
+  };
+}
+
+const fields = {
+  creators: chips($('viewer-creators'), 'known-creators', 'Add a creator'),
+  subjects: chips($('viewer-subjects'), 'known-subjects', 'Add a subject'),
+};
+let viewing = null;
+
+function view(picture) {
+  viewing = picture;
+  const img = $('viewer-img');
+  img.alt = picture.name;
+  img.style.aspectRatio = `${picture.width} / ${picture.height}`;
+  // The small preview is already loaded, so it shows at once and is swapped for a sharper one.
+  img.src = `/api/library/${picture.id}/thumb`;
+  const sharp = new Image();
+  sharp.onload = () => { if (viewing === picture) img.src = sharp.src; };
+  sharp.src = `/api/library/${picture.id}/view`;
+
+  const ext = extension(picture.name);
+  $('viewer-name').value = picture.name.slice(0, picture.name.length - ext.length);
+  $('viewer-ext').textContent = ext;
+  for (const field in fields) fields[field].set(picture[field], picture.from_originals[field]);
+  $('viewer-meta').textContent = `${picture.width}×${picture.height} · ${size(picture.bytes)}`
+    + ` · added ${new Date(picture.added_at).toLocaleDateString()}`;
+  $('viewer-full').href = `/api/library/${picture.id}/file`;
+  $('viewer-msg').textContent = '';
+  madeFrom(picture);
+  if (!viewer.open) viewer.showModal();
+}
+
+// Name the pictures this one was made from, since that is where their details are changed.
+async function madeFrom(picture) {
+  const line = $('viewer-from');
+  line.hidden = true;
+  if (picture.kind !== 'result') return;
+  const { parents } = await api(`/api/library/${picture.id}`).catch(() => ({ parents: [] }));
+  const kept = parents.map(parent => data.items.find(p => p.id === parent.id)).filter(Boolean);
+  if (viewing !== picture || !kept.length) return;
+  line.replaceChildren('Made from ');
+  kept.forEach((parent, i) => {
+    const link = button(parent.name, () => view(parent), 'link');
+    link.type = 'button';
+    line.append(i ? ' and ' : '', link);
+  });
+  line.append('. Details with a dashed outline come from there.');
+  line.hidden = false;
+}
+
+$('viewer-form').onsubmit = async e => {
+  e.preventDefault();
+  if (busy) return;
+  const picture = viewing;
+  const body = {
+    name: $('viewer-name').value + $('viewer-ext').textContent,
+    creators: fields.creators.read(),
+    subjects: fields.subjects.read(),
+  };
+  setBusy(true);
+  $('viewer-msg').textContent = '';
+  try {
+    await api(`/api/library/${picture.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    viewer.close();
+    say('Saved.');
+  } catch (err) {
+    $('viewer-msg').textContent = err.message;
+  }
+  busy = false;
+  await load().catch(err => say(err.message, true));
+  setBusy(false);
+};
+
+$('viewer-close').onclick = () => viewer.close();
+// A tap on the dimmed page around the popup closes it. A drag that only ends there does not.
+let pressed = null;
+viewer.onpointerdown = e => { pressed = e.target; };
+viewer.onclick = e => { if (e.target === viewer && pressed === viewer) viewer.close(); };
+find.oninput = render;
 
 async function run(label, fn) {
   if (busy) return;

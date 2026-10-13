@@ -1,9 +1,10 @@
 """HTTP API for the picture library: what is kept, and moving it on and off the TV."""
 import re
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import sending
 from .editor_routes import _stem
@@ -16,6 +17,15 @@ _ID = re.compile(r"[0-9a-f]{32}")
 
 class SendRequest(BaseModel):
     show: bool = False
+
+
+Details = Annotated[list[Annotated[str, Field(max_length=100)]], Field(max_length=50)]
+
+
+class EditRequest(BaseModel):
+    name: str | None = Field(None, max_length=200)
+    creators: Details | None = None
+    subjects: Details | None = None
 
 
 def create_router(tv, library) -> APIRouter:
@@ -36,12 +46,27 @@ def create_router(tv, library) -> APIRouter:
     def picture(image_id: str):
         return find(image_id)
 
+    @router.patch("/{image_id}")
+    def edit(image_id: str, req: EditRequest):
+        try:
+            return library.edit(find(image_id)["id"], req.name, req.creators, req.subjects)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
     @router.get("/{image_id}/thumb")
     def thumb(image_id: str):
         path = library.thumb_path(find(image_id)["id"])
         if not path.is_file():
             raise HTTPException(404, "No preview for that picture.")
         # A picture never changes once it is kept, so its preview can be cached for good.
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "max-age=31536000, immutable"})
+
+    @router.get("/{image_id}/view")
+    def view(image_id: str):
+        try:
+            path = library.view_path(find(image_id))
+        except OSError:
+            raise HTTPException(404, "That picture's file is missing.")
         return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "max-age=31536000, immutable"})
 
     @router.get("/{image_id}/file")
