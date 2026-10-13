@@ -2,6 +2,8 @@
 
 Ported from image_crop_upscale/app.py.
 """
+import math
+
 from PIL import Image, ImageOps
 
 PRESETS = {
@@ -21,10 +23,20 @@ def open_oriented(path):
 
 
 def _crop(img, crop_coords):
-    left = int(crop_coords['x'])
-    top = int(crop_coords['y'])
-    right = int(crop_coords['x'] + crop_coords['width'])
-    bottom = int(crop_coords['y'] + crop_coords['height'])
+    """Crop to the requested rectangle, trimmed to the edges of the image.
+
+    Raises ValueError if the rectangle is not finite or misses the image.
+    """
+    x, y = crop_coords['x'], crop_coords['y']
+    edges = (x, y, x + crop_coords['width'], y + crop_coords['height'])
+    if not all(math.isfinite(edge) for edge in edges):
+        raise ValueError('the crop must be finite numbers')
+    left = max(0, int(edges[0]))
+    top = max(0, int(edges[1]))
+    right = min(img.width, int(edges[2]))
+    bottom = min(img.height, int(edges[3]))
+    if right <= left or bottom <= top:
+        raise ValueError('the crop is outside the picture')
     return img.crop((left, top, right, bottom))
 
 
@@ -47,8 +59,8 @@ def crop_and_upscale(input_path, output_path, crop_coords, target_width, target_
         # Scale to fit within target while maintaining aspect ratio
         crop_w, crop_h = cropped.size
         scale = min(target_width / crop_w, target_height / crop_h)
-        new_w = int(crop_w * scale)
-        new_h = int(crop_h * scale)
+        new_w = min(target_width, round(crop_w * scale))
+        new_h = min(target_height, round(crop_h * scale))
         resized = cropped.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
         # Center on a black canvas
@@ -81,9 +93,12 @@ def crop_and_combine_diptych(input_path1, input_path2, output_path, crop1, crop2
 
     # Scale image 1 to target height, preserving aspect ratio
     sw1 = round(cropped1.width * target_height / cropped1.height)
-    resized1 = cropped1.resize((sw1, target_height), Image.Resampling.LANCZOS)
-
     sw2 = target_width - gap - sw1
+    # Checked before any resize: a very wide first crop would otherwise be scaled up first.
+    if sw1 < 1 or sw2 < 1:
+        raise ValueError('the first picture leaves no room for a second')
+
+    resized1 = cropped1.resize((sw1, target_height), Image.Resampling.LANCZOS)
 
     cropped2 = _crop(open_oriented(input_path2), crop2)
     resized2 = cropped2.resize((sw2, target_height), Image.Resampling.LANCZOS)

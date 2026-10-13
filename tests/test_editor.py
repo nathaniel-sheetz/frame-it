@@ -112,10 +112,19 @@ class TestCropAndUpscale:
                 1080
             )
 
-            # Verify output exists and has correct dimensions
+            # Verify output exists, has correct dimensions and shows the red quadrant
             assert os.path.exists(output_path)
             with Image.open(output_path) as result:
                 assert result.size == (1920, 1080)
+                r, g, b = result.getpixel((960, 540))
+                assert r > 200 and g < 60 and b < 60
+
+            # Crop from the bottom-right quadrant (should be yellow), so x and y are used
+            crop_coords = {'x': 400, 'y': 300, 'width': 400, 'height': 225}
+            crop_and_upscale(input_path, output_path, crop_coords, 1920, 1080)
+            with Image.open(output_path) as result:
+                r, g, b = result.getpixel((960, 540))
+                assert r > 200 and g > 200 and b < 60
 
         finally:
             # Cleanup
@@ -406,7 +415,7 @@ class TestCropAndCombineDiptych:
                     os.unlink(p)
 
     def test_diptych_layout_math_exact(self):
-        """Verify sw1 + gap + sw2 = targetW exactly"""
+        """Image 1, the gap and image 2 fill the target width with nothing left over"""
         input1 = self._create_temp_image(400, 900, 'red')
         input2 = self._create_temp_image(500, 800, 'blue')
         output = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
@@ -418,25 +427,23 @@ class TestCropAndCombineDiptych:
 
             gap = round(target_w * 0.01)
             sw1 = round(400 * target_h / 900)
-            sw2 = target_w - gap - sw1
-
-            # Verify the math
-            assert sw1 + gap + sw2 == target_w
+            mid_y = target_h // 2
 
             crop_and_combine_diptych(input1, input2, output, crop1, crop2, target_w, target_h)
 
             with Image.open(output) as result:
                 assert result.size == (target_w, target_h)
+                # Image 1 runs right up to sw1
+                r, g, b = result.getpixel((sw1 - 20, mid_y))
+                assert r > 200 and b < 60
+                # Image 2 starts straight after the gap and reaches the right edge
+                for x in (sw1 + gap + 20, target_w - 1):
+                    r, g, b = result.getpixel((x, mid_y))
+                    assert b > 200 and r < 60
         finally:
             for p in [input1, input2, output]:
                 if os.path.exists(p):
                     os.unlink(p)
-
-    def test_diptych_gap_width_approximately_one_percent(self):
-        """Gap should be approximately 1% of target width"""
-        for target_w in [3840, 1920]:
-            gap = round(target_w * 0.01)
-            assert abs(gap / target_w - 0.01) < 0.005
 
     def test_diptych_image_content_fills_non_gap(self):
         """Both image areas should contain non-black content"""
@@ -538,3 +545,53 @@ class TestCropAndCombineDiptych:
             for p in [input1, input2, output]:
                 if os.path.exists(p):
                     os.unlink(p)
+
+
+class TestCropBounds:
+    """Crops that cannot be honoured are refused, and exact fits reach the edge"""
+
+    @pytest.mark.parametrize('crop', [
+        {'x': float('inf'), 'y': 0, 'width': 100, 'height': 100},
+        {'x': 0, 'y': 0, 'width': float('inf'), 'height': 100},
+        {'x': 0, 'y': float('nan'), 'width': 100, 'height': 100},
+    ])
+    def test_non_finite_crop_rejected(self, tmp_path, crop):
+        """Infinity and NaN are refused instead of overflowing"""
+        source = tmp_path / 'source.jpg'
+        Image.new('RGB', (800, 600), color='white').save(source)
+
+        with pytest.raises(ValueError, match='finite'):
+            crop_and_upscale(source, tmp_path / 'out.jpg', crop, 1920, 1080)
+
+    def test_diptych_wide_first_crop_rejected_before_scaling(self, tmp_path, monkeypatch):
+        """A first crop that leaves no room is refused without scaling it up first"""
+        source1 = tmp_path / 'wide.jpg'
+        source2 = tmp_path / 'second.jpg'
+        Image.new('RGB', (6000, 100), color='red').save(source1)
+        Image.new('RGB', (500, 800), color='blue').save(source2)
+
+        def resize(*args, **kwargs):
+            raise AssertionError('resized before checking the layout')
+
+        monkeypatch.setattr(Image.Image, 'resize', resize)
+
+        crop1 = {'x': 0, 'y': 0, 'width': 6000, 'height': 100}
+        crop2 = {'x': 0, 'y': 0, 'width': 500, 'height': 800}
+        with pytest.raises(ValueError, match='no room'):
+            crop_and_combine_diptych(source1, source2, tmp_path / 'out.jpg', crop1, crop2, 3840, 2160)
+
+    @pytest.mark.parametrize('size, edge', [
+        ((1074, 400), (3839, 1080)),  # fits the width exactly: last column
+        ((400, 1070), (1920, 2159)),  # fits the height exactly: last row
+    ])
+    def test_letterbox_exact_fit_reaches_the_edge(self, tmp_path, size, edge):
+        """Scaling to an exact fit must not fall a pixel short and leave a black line"""
+        source = tmp_path / 'source.png'
+        output = tmp_path / 'out.jpg'
+        Image.new('RGB', size, color='white').save(source)
+
+        crop = {'x': 0, 'y': 0, 'width': size[0], 'height': size[1]}
+        crop_and_upscale(source, output, crop, 3840, 2160, letterbox=True)
+
+        with Image.open(output) as result:
+            assert min(result.getpixel(edge)) > 235

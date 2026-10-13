@@ -1,5 +1,6 @@
 """HTTP API for the picture editor: upload a source, process it, send the result to the TV."""
 import io
+import logging
 import re
 import time
 import uuid
@@ -13,9 +14,12 @@ from pydantic import BaseModel, Field
 from . import editor
 from .tv import TVUnavailable
 
+log = logging.getLogger(__name__)
+
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_AGE_SECONDS = 24 * 60 * 60
-FORMATS = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp", "BMP": "bmp"}
+# Pillow reports multi-picture JPEGs (many phones and cameras) as MPO.
+FORMATS = {"JPEG": "jpg", "MPO": "jpg", "PNG": "png", "WEBP": "webp", "BMP": "bmp"}
 
 # Files are only ever addressed by names this module generated.
 _SOURCE_NAME = re.compile(r"[0-9a-f]{32}\.(jpg|png|webp|bmp)")
@@ -53,11 +57,19 @@ class SendRequest(BaseModel):
 
 
 def _sweep(folder: Path) -> None:
-    """Delete working files left over from earlier sessions."""
+    """Delete working files left over from earlier sessions.
+
+    Best effort: a file that cannot be removed (open elsewhere on Windows) is
+    left for the next sweep, and a folder deleted while running is recreated.
+    """
     cutoff = time.time() - MAX_AGE_SECONDS
+    folder.mkdir(parents=True, exist_ok=True)
     for path in folder.iterdir():
-        if path.is_file() and path.stat().st_mtime < cutoff:
-            path.unlink(missing_ok=True)
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def _stem(original_filename: str) -> str:
@@ -74,7 +86,6 @@ def _download_name(name: str | None, fallback: str) -> str:
 def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
     router = APIRouter(prefix="/api/editor")
     for folder in (upload_dir, processed_dir):
-        folder.mkdir(parents=True, exist_ok=True)
         _sweep(folder)
 
     def source_path(name: str) -> Path:
@@ -109,12 +120,12 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "File too large. Maximum size is 50MB.")
         try:
-            with Image.open(io.BytesIO(data)) as img:
+            with Image.open(io.BytesIO(data), formats=["JPEG", "PNG", "WEBP", "BMP"]) as img:
                 extension = FORMATS.get(img.format)
+                if not extension:
+                    raise HTTPException(400, "Invalid file type")
                 width, height = ImageOps.exif_transpose(img).size
-        except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
-            raise HTTPException(400, "Invalid file type")
-        if not extension:
+        except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError):
             raise HTTPException(400, "Invalid file type")
 
         _sweep(upload_dir)
@@ -145,8 +156,10 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
             )
         except ValueError as e:
             raise HTTPException(400, f"That crop cannot be processed: {e}")
-        except OSError as e:
-            raise HTTPException(500, f"Processing failed: {e}")
+        except OSError:
+            # Logged, not returned: the message carries server paths.
+            log.exception("Editor processing failed")
+            raise HTTPException(500, "Processing failed.")
         return result(output, f"{_stem(req.original_filename)}_{req.preset}.jpg")
 
     @router.post("/process-diptych")
@@ -163,8 +176,9 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
         except ValueError as e:
             # Raised when the first crop is so wide there is no room for a second picture.
             raise HTTPException(400, f"That pair cannot be processed: {e}")
-        except OSError as e:
-            raise HTTPException(500, f"Processing failed: {e}")
+        except OSError:
+            log.exception("Editor processing failed")
+            raise HTTPException(500, "Processing failed.")
         name = f"{_stem(req.original_filename1)}_{_stem(req.original_filename2)}_pair_{req.preset}.jpg"
         return result(output, name)
 
@@ -181,11 +195,19 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
         data = result_path(filename).read_bytes()
         try:
             content_id = tv.upload(data)
-            if not content_id:
-                raise HTTPException(502, "The TV did not confirm the upload.")
-            shown = tv.select(content_id) if req.show else False
         except TVUnavailable as e:
             raise HTTPException(503, str(e))
-        return {"id": content_id, "selected": req.show, "shown": shown}
+        if not content_id:
+            raise HTTPException(502, "The TV did not confirm the upload.")
+        sent = {"id": content_id, "selected": req.show, "shown": False}
+        if req.show:
+            try:
+                sent["shown"] = tv.select(content_id)
+            except TVUnavailable:
+                # The picture is on the TV by now, so this is not an error to retry:
+                # sending again would upload a second copy.
+                sent["selected"] = False
+                sent["warning"] = "Sent to the TV, but it could not be put on display."
+        return sent
 
     return router

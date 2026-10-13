@@ -12,8 +12,6 @@ function initialState() {
         selectedPreset: '4k',
         selectedPresetData: { width: 3840, height: 2160 },
         cropper: null,
-        processedFilename: null,
-        suggestedFilename: null,
         resultUrl: null,
         downloadUrl: null,
         letterboxEnabled: false,
@@ -30,7 +28,23 @@ function initialState() {
 let state = initialState();
 
 function errorText(data, fallback) {
-    return typeof data.detail === 'string' ? data.detail : fallback;
+    if (typeof data.detail === 'string') {
+        return data.detail;
+    }
+    // Validation errors arrive as a list of { msg, ... }.
+    if (Array.isArray(data.detail) && data.detail[0] && data.detail[0].msg) {
+        return `${fallback}: ${data.detail[0].msg}`;
+    }
+    return fallback;
+}
+
+// A non-JSON body (a plain-text server error, a proxy page) becomes a readable error.
+async function readJson(response) {
+    try {
+        return await response.json();
+    } catch (error) {
+        throw new Error(`Server error (${response.status})`);
+    }
 }
 
 // DOM Elements
@@ -58,6 +72,7 @@ const letterboxHint = document.getElementById('letterbox-hint');
 const diptychControls = document.getElementById('diptych-controls');
 const diptychBtn = document.getElementById('diptych-btn');
 const diptychUploadSection = document.getElementById('diptych-upload-section');
+const diptychCancelBtn = document.getElementById('diptych-cancel-btn');
 const uploadArea2 = document.getElementById('upload-area-2');
 const fileInput2 = document.getElementById('file-input-2');
 const uploadStatus2 = document.getElementById('upload-status-2');
@@ -115,12 +130,14 @@ function handleFileSelect(e) {
     const files = e.target.files;
     if (files.length > 0) {
         handleFile(files[0]);
+        // Cleared so picking the same file again after a failure still fires 'change'.
+        e.target.value = '';
     }
 }
 
 async function handleFile(file) {
     // Validate file type
-    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/bmp'];
+    const validTypes = ['image/png', 'image/jpeg','image/webp', 'image/bmp'];
     if (!validTypes.includes(file.type)) {
         showUploadStatus('Invalid file type. Please upload an image file.', 'error');
         return;
@@ -144,7 +161,7 @@ async function handleFile(file) {
             body: formData
         });
 
-        const data = await response.json();
+        const data = await readJson(response);
 
         if (data.success) {
             // Reset any existing state from previous image
@@ -211,14 +228,14 @@ function initializeCropper() {
     cropSection.style.display = 'block';
     processSection.style.display = 'block';
 
-    // Calculate aspect ratio (free if letterbox enabled)
-    const aspectRatio = state.letterboxEnabled ? NaN : (state.selectedPresetData.width / state.selectedPresetData.height);
-
     // Function to initialize the cropper
     function createCropper() {
         if (state.cropper) {
             state.cropper.destroy();
         }
+        // Calculate aspect ratio (free if letterbox enabled). Read here, not before the
+        // image loads, so a toggle made while it was loading is honoured.
+        const aspectRatio = state.letterboxEnabled ? NaN : (state.selectedPresetData.width / state.selectedPresetData.height);
         state.cropper = new Cropper(cropImage, {
             aspectRatio: aspectRatio,
             viewMode: 1,
@@ -318,7 +335,7 @@ async function processImage() {
     }
 
     // Get crop data
-    const cropData = state.cropper.getData();
+    const cropData = state.cropper.getData(true);
 
     const requestData = {
         filename: state.uploadedFilename,
@@ -345,7 +362,7 @@ async function processImage() {
             body: JSON.stringify(requestData)
         });
 
-        const data = await response.json();
+        const data = await readJson(response);
 
         if (data.success) {
             showResult(data);
@@ -360,8 +377,6 @@ async function processImage() {
 }
 
 function showResult(data) {
-    state.processedFilename = data.filename;
-    state.suggestedFilename = data.suggested_filename;
     state.resultUrl = data.url;
     state.downloadUrl = data.download_url;
 
@@ -409,11 +424,13 @@ async function sendToTV() {
             body: JSON.stringify({ show: showToggle.checked })
         });
 
-        const data = await response.json();
+        const data = await readJson(response);
 
         if (response.ok) {
             // The button stays disabled so the same result is not sent twice.
-            if (data.shown) {
+            if (data.warning) {
+                showSendStatus(data.warning, 'error');
+            } else if (data.shown) {
                 showSendStatus('Sent. It is on display now.', 'success');
             } else if (data.selected) {
                 showSendStatus('Sent and selected. Art Mode is off, so it was not put on screen.', 'success');
@@ -487,8 +504,8 @@ function initializeDownload() {
         gapSlider.value = '1';
         gapPercentDisplay.textContent = '1%';
         gapPxDisplay.textContent = '~38px';
-        if (uploadStatus2) uploadStatus2.textContent = '';
-        if (fileInput2) fileInput2.value = '';
+        uploadStatus2.textContent = '';
+        fileInput2.value = '';
 
         // Scroll to top
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -506,6 +523,15 @@ function initializeDiptych() {
         diptychUploadSection.scrollIntoView({ behavior: 'smooth' });
     });
 
+    // Back out of side-by-side mode without re-uploading the first picture
+    diptychCancelBtn.addEventListener('click', function() {
+        resetDiptychState();
+        if (state.cropper) {
+            // Brings back the "add second image" button if there is still room for one.
+            updateCropInfo(state.cropper.getData());
+        }
+    });
+
     // Upload area 2 click
     uploadArea2.addEventListener('click', () => fileInput2.click());
 
@@ -513,6 +539,7 @@ function initializeDiptych() {
     fileInput2.addEventListener('change', function(e) {
         if (e.target.files.length > 0) {
             handleFile2(e.target.files[0]);
+            e.target.value = '';
         }
     });
 
@@ -527,6 +554,8 @@ function initializeDiptych() {
         if (state.diptychMode && state.cropper2) {
             const ratio2 = computeImage2Ratio();
             if (ratio2 !== null && ratio2 > 0) {
+                // The gap changes how much room image 2 has, so its crop must follow.
+                state.cropper2.setAspectRatio(ratio2);
                 diptychRefreshBar.style.display = 'flex';
                 diptychCropWarning.style.display = 'none';
             } else {
@@ -562,7 +591,7 @@ function initializeDiptych() {
 }
 
 async function handleFile2(file) {
-    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/bmp'];
+    const validTypes = ['image/png', 'image/jpeg','image/webp', 'image/bmp'];
     if (!validTypes.includes(file.type)) {
         uploadStatus2.className = 'error';
         uploadStatus2.textContent = 'Invalid file type. Please upload an image file.';
@@ -587,7 +616,7 @@ async function handleFile2(file) {
             body: formData
         });
 
-        const data = await response.json();
+        const data = await readJson(response);
 
         if (data.success) {
             state.image2UploadedFilename = data.filename;
@@ -707,8 +736,8 @@ function resetDiptychState() {
     diptychCropWarning.style.display = 'none';
     diptychRefreshBar.style.display = 'none';
     diptychGapControl.style.display = 'none';
-    if (uploadStatus2) uploadStatus2.textContent = '';
-    if (fileInput2) fileInput2.value = '';
+    uploadStatus2.textContent = '';
+    fileInput2.value = '';
     letterboxToggle.disabled = false;
 }
 
@@ -718,8 +747,8 @@ async function processDiptychImage() {
         return;
     }
 
-    const cropData1 = state.cropper.getData();
-    const cropData2 = state.cropper2.getData();
+    const cropData1 = state.cropper.getData(true);
+    const cropData2 = state.cropper2.getData(true);
 
     const requestData = {
         filename1: state.uploadedFilename,
@@ -754,7 +783,7 @@ async function processDiptychImage() {
             body: JSON.stringify(requestData)
         });
 
-        const data = await response.json();
+        const data = await readJson(response);
 
         if (data.success) {
             showResult(data);

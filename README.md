@@ -46,12 +46,12 @@ is saved to `tv-token.txt`.
 | DELETE | `/api/art/{id}` | Remove from the TV |
 | POST | `/api/editor/upload` | Upload a source picture to edit (`file` form field, max 50 MB) |
 | GET | `/api/editor/source/{name}` | The uploaded source |
-| POST | `/api/editor/process` | Crop and scale (`filename`, `crop`, `letterbox`) |
-| POST | `/api/editor/process-diptych` | Two crops side by side (`filename1/2`, `crop1/2`, `gap_percent`) |
+| POST | `/api/editor/process` | Crop and scale (`filename`, `crop`, `letterbox`, `preset`, `original_filename`) |
+| POST | `/api/editor/process-diptych` | Two crops side by side (`filename1/2`, `crop1/2`, `gap_percent`, `preset`, `original_filename1/2`) |
 | GET | `/api/editor/result/{name}` | The processed JPEG; add `?download=1&name=...` to download |
 | POST | `/api/editor/result/{name}/send` | Send the processed JPEG to the TV unchanged (`show`) |
 
-Editor working files live in `data/editor/` and are deleted after 24 hours.
+Editor working files live in `data/editor/`; files older than 24 hours are removed at startup and on each upload.
 
 ## Tests
 

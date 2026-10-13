@@ -1,13 +1,16 @@
 import io
 import os
+import shutil
 import time
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app.editor_routes import create_router
+from app import editor, editor_routes
+from app.editor_routes import _download_name, _stem, create_router
 from app.tv import TVUnavailable
 
 
@@ -16,14 +19,18 @@ class FakeTV:
         self.uploaded = []
         self.selected = []
         self.unavailable = False
+        self.select_unavailable = False
+        self.content_id = 'MY_F0001'
 
     def upload(self, jpeg):
         if self.unavailable:
             raise TVUnavailable('Could not reach the TV.')
         self.uploaded.append(jpeg)
-        return 'MY_F0001'
+        return self.content_id
 
     def select(self, content_id):
+        if self.select_unavailable:
+            raise TVUnavailable('Could not reach the TV.')
         self.selected.append(content_id)
         return True
 
@@ -65,6 +72,11 @@ def processed(client):
     return process(client, src['filename']).json()
 
 
+def make_stale(path):
+    two_days_ago = time.time() - 2 * 24 * 60 * 60
+    os.utime(path, (two_days_ago, two_days_ago))
+
+
 class TestUpload:
     def test_upload_success(self, client, dirs):
         resp = upload(client, image_bytes(800, 600), 'My Photo.jpg')
@@ -102,6 +114,40 @@ class TestUpload:
         resp = client.get(data['url'])
         assert resp.status_code == 200
         assert resp.content == original
+
+    def test_upload_multi_picture_jpeg(self, client):
+        # Phones and cameras write these as .jpg; Pillow calls the format MPO.
+        buf = io.BytesIO()
+        frames = [Image.new('RGB', (800, 600), color=c) for c in ('red', 'blue')]
+        frames[0].save(buf, format='MPO', save_all=True, append_images=frames[1:])
+        resp = upload(client, buf.getvalue())
+        assert resp.status_code == 200
+        assert resp.json()['filename'].endswith('.jpg')
+        assert process(client, resp.json()['filename']).status_code == 200
+
+    @pytest.mark.parametrize('fmt, extension', [('WEBP', '.webp'), ('BMP', '.bmp')])
+    def test_upload_other_formats_can_be_processed(self, client, dirs, fmt, extension):
+        src = upload(client, image_bytes(800, 600, fmt=fmt)).json()
+        assert src['filename'].endswith(extension)
+        data = process(client, src['filename']).json()
+        with Image.open(dirs[1] / data['filename']) as img:
+            assert img.size == (3840, 2160)
+
+    def test_upload_truncated_image(self, client):
+        data = image_bytes(800, 600)
+        resp = upload(client, data[:len(data) // 2])
+        assert resp.status_code == 400
+        assert resp.json()['detail'] == 'Invalid file type'
+
+    def test_upload_too_large(self, client, dirs, monkeypatch):
+        monkeypatch.setattr(editor_routes, 'MAX_UPLOAD_BYTES', 100)
+        resp = upload(client, image_bytes(800, 600))
+        assert resp.status_code == 413
+        assert list(dirs[0].iterdir()) == []
+
+    @pytest.mark.parametrize('name', ['photo.jpg', '..%5C..%5Cconfig.toml', '0' * 32 + '.gif'])
+    def test_source_rejects_names_it_did_not_issue(self, client, name):
+        assert client.get(f'/api/editor/source/{name}').status_code == 404
 
 
 class TestProcess:
@@ -147,6 +193,42 @@ class TestProcess:
     def test_process_rejects_names_it_did_not_issue(self, client, name):
         assert process(client, name).status_code == 404
 
+    def test_process_crop_one_pixel_past_the_edge_is_not_padded(self, client, dirs):
+        src = upload(client, image_bytes(1200, 800, 'white')).json()
+        resp = process(client, src['filename'], crop={'x': 11, 'y': 0, 'width': 1190, 'height': 669})
+        with Image.open(dirs[1] / resp.json()['filename']) as img:
+            assert min(img.getpixel((3839, 1080))) > 235
+
+    def test_process_oversized_crop_is_clamped_to_the_picture(self, client, dirs):
+        src = upload(client, image_bytes(1200, 800, 'white')).json()
+        resp = process(client, src['filename'], crop={'x': -500, 'y': -500, 'width': 1e9, 'height': 1e9})
+        assert resp.status_code == 200
+        with Image.open(dirs[1] / resp.json()['filename']) as img:
+            assert min(img.getpixel((2, 2))) > 235
+            assert min(img.getpixel((3837, 2157))) > 235
+
+    def test_process_crop_outside_the_picture_rejected(self, client):
+        src = upload(client, image_bytes(800, 600)).json()
+        resp = process(client, src['filename'], crop={'x': 900, 'y': 700, 'width': 400, 'height': 225})
+        assert resp.status_code == 400
+        assert 'outside the picture' in resp.json()['detail']
+
+    @pytest.mark.parametrize('letterbox', [False, True])
+    def test_process_sub_pixel_crop_rejected(self, client, letterbox):
+        src = upload(client, image_bytes(800, 600)).json()
+        crop = {'x': 0, 'y': 0, 'width': 0.5, 'height': 0.5}
+        assert process(client, src['filename'], crop=crop, letterbox=letterbox).status_code == 400
+
+    def test_process_failure_does_not_leak_server_paths(self, client, dirs, monkeypatch):
+        def fail(*args, **kwargs):
+            raise OSError(2, 'No such file or directory', str(dirs[1] / 'result.jpg'))
+
+        monkeypatch.setattr(editor, 'crop_and_upscale', fail)
+        src = upload(client, image_bytes(800, 600)).json()
+        resp = process(client, src['filename'])
+        assert resp.status_code == 500
+        assert resp.json()['detail'] == 'Processing failed.'
+
 
 class TestDiptych:
     def body(self, client, **extra):
@@ -178,6 +260,13 @@ class TestDiptych:
             # Image 1 is 960px wide; a 10% gap ends at 960 + 384, a 50% gap would not.
             assert max(img.getpixel((960 + 200, 1080))) < 40
             assert img.getpixel((960 + 384 + 200, 1080))[2] > 200
+
+    def test_diptych_gap_has_a_minimum(self, client, dirs):
+        data = client.post('/api/editor/process-diptych', json=self.body(client, gap_percent=0)).json()
+        with Image.open(dirs[1] / data['filename']) as img:
+            # A 1% gap is 38px: black in the middle of it, image 2 just after.
+            assert max(img.getpixel((960 + 19, 1080))) < 40
+            assert img.getpixel((960 + 38 + 20, 1080))[2] > 200
 
     def test_diptych_no_room_for_second_image(self, client):
         body = self.body(client)
@@ -241,6 +330,22 @@ class TestSendToTV:
         assert resp.status_code == 503
         assert resp.json()['detail'] == 'Could not reach the TV.'
 
+    def test_send_succeeds_when_only_the_display_step_fails(self, client, tv):
+        # The picture is on the TV by then; an error would invite a second, duplicate send.
+        tv.select_unavailable = True
+        resp = client.post(processed(client)['url'] + '/send', json={'show': True})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert (data['id'], data['selected'], data['shown']) == ('MY_F0001', False, False)
+        assert 'could not be put on display' in data['warning']
+        assert len(tv.uploaded) == 1
+
+    def test_send_when_tv_does_not_confirm_the_upload(self, client, tv):
+        tv.content_id = ''
+        resp = client.post(processed(client)['url'] + '/send', json={'show': True})
+        assert resp.status_code == 502
+        assert tv.selected == []
+
 
 class TestCleanup:
     def test_old_working_files_are_swept_on_upload(self, client, dirs):
@@ -251,3 +356,53 @@ class TestCleanup:
         fresh = upload(client, image_bytes(800, 600)).json()
         assert not stale.exists()
         assert (dirs[0] / fresh['filename']).is_file()
+
+    def test_old_results_are_swept_and_fresh_ones_kept(self, client, dirs):
+        fresh = dirs[1] / processed(client)['filename']
+        stale = dirs[1] / ('b' * 32 + '.jpg')
+        stale.write_bytes(image_bytes(10, 10))
+        make_stale(stale)
+        upload(client, image_bytes(800, 600))
+        assert not stale.exists()
+        assert fresh.is_file()
+
+    def test_upload_survives_a_file_that_cannot_be_deleted(self, client, dirs, monkeypatch):
+        # On Windows a working file that is still open cannot be removed.
+        stale = dirs[0] / ('c' * 32 + '.jpg')
+        stale.write_bytes(image_bytes(10, 10))
+        make_stale(stale)
+
+        def locked(self, missing_ok=False):
+            raise PermissionError(13, 'The process cannot access the file', str(self))
+
+        monkeypatch.setattr(Path, 'unlink', locked)
+        assert upload(client, image_bytes(800, 600)).status_code == 200
+
+    def test_upload_recreates_deleted_working_folders(self, client, dirs):
+        for folder in dirs:
+            shutil.rmtree(folder)
+        resp = upload(client, image_bytes(800, 600))
+        assert resp.status_code == 200
+        assert (dirs[0] / resp.json()['filename']).is_file()
+        assert dirs[1].is_dir()
+
+
+class TestNames:
+    @pytest.mark.parametrize('original, expected', [
+        ('Falls (1826).jpg', 'Falls _1826_'),
+        ('C:\\scans\\plate.tar.gz', 'plate_tar'),
+        ('../../etc/passwd', 'passwd'),
+        ('', 'image'),
+    ])
+    def test_stem(self, original, expected):
+        assert _stem(original) == expected
+
+    @pytest.mark.parametrize('name, expected', [
+        ('Living room', 'Living room.jpg'),
+        ('x.JPG', 'x.JPG'),
+        ('a/b', 'a_b.jpg'),
+        ('....', 'fallback.jpg'),
+        (None, 'fallback.jpg'),
+    ])
+    def test_download_name(self, name, expected):
+        assert _download_name(name, 'fallback') == expected
