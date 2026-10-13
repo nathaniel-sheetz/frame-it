@@ -10,6 +10,43 @@ any browser on the same network.
 - **Editor** (`/editor`): crop a picture for the Frame's 3840×2160 panel, with
   optional letterboxing or a side-by-side pair, review the result, and send it
   straight to the TV. Pictures can come from a file or a link here too.
+- **Library** (`/library`): every picture you have brought in, and every result
+  you sent to the TV or saved. Send a picture again, take it off the TV without
+  losing it, or open an original in the editor.
+
+## Library
+
+The library keeps pictures on the computer running the app, in `data/library/`
+(a database, the pictures, and small previews). The folder is set by
+`[library] path` in `config.toml`. Nothing in it is deleted automatically.
+
+- **Originals** are kept as soon as they are uploaded or fetched. The same file
+  a second time is the same entry.
+- **Results** (the JPEGs made for the TV) are kept when they are sent, or with
+  **Save to library** in the editor. Each remembers its originals and crop
+  settings. Results that were processed but neither sent nor saved are removed
+  after 24 hours.
+
+Each picture carries one of these labels, and the page filters by them:
+
+| Label | Meaning |
+| --- | --- |
+| On TV | A result with a copy on the TV now |
+| Ready | A result that is not on the TV, or an original that suits the screen and has not been used yet |
+| Building block | Tagged as needing work before it suits the screen |
+| Original | An original that suits the screen and has already been made into a picture |
+
+An original is tagged as a building block when it is added if an automatic
+16:9 fit would cut off more than 10% of it, or if it would be under 1920 wide
+after that fit. The tag can be removed or added by hand on the library page.
+
+Removing a picture from the TV, here or with the TV's remote, leaves it in the
+library. Pictures that were on the TV before the library existed show in the
+gallery as "Not in library": the TV only hands back small thumbnails, so they
+cannot be copied in.
+
+The library is not backed up by the app. Copy the folder somewhere else if the
+crop work matters to you.
 
 Links are downloaded by the server, so it only follows `http` and `https`
 addresses on the public internet (not this computer or the home network), and
@@ -110,9 +147,21 @@ The log is `~/Library/Logs/frame-tv.log`. To remove the service:
 | POST | `/api/editor/process` | Crop and scale (`filename`, `crop`, `letterbox`, `preset`, `original_filename`) |
 | POST | `/api/editor/process-diptych` | Two crops side by side (`filename1/2`, `crop1/2`, `gap_percent`, `preset`, `original_filename1/2`) |
 | GET | `/api/editor/result/{name}` | The processed JPEG; add `?download=1&name=...` to download |
-| POST | `/api/editor/result/{name}/send` | Send the processed JPEG to the TV unchanged (`show`) |
+| POST | `/api/editor/result/{name}/send` | Send the processed JPEG to the TV unchanged and keep it in the library (`show`, `name`) |
+| POST | `/api/editor/result/{name}/save` | Keep the processed JPEG in the library without sending it (`name`) |
+| GET | `/api/library` | Every library picture, the count under each filter, and disk use |
+| GET | `/api/library/{id}` | One picture, with its crop settings and originals |
+| GET | `/api/library/{id}/thumb`, `/file` | Its preview, and the picture itself |
+| POST | `/api/library/{id}/send` | Send to the TV (`show`). An original is sent with the automatic fit; a result already on the TV is refused |
+| POST | `/api/library/{id}/display` | Set a picture that is on the TV as current art |
+| POST | `/api/library/{id}/remove-from-tv` | Remove its copy from the TV and keep the picture |
+| PUT, DELETE | `/api/library/{id}/tags/building-block` | Add or remove the building block tag |
+| DELETE | `/api/library/{id}` | Delete from the library. Refused while the picture is on the TV |
 
-Editor working files live in `data/editor/`; files older than 24 hours are removed at startup and on each upload or fetch.
+Sources are library pictures, so `upload` and `fetch` add to the library and
+`{name}` is the library id plus the file's extension. Processed results are
+working files in `data/editor/processed/` until they are sent or saved; ones
+older than 24 hours are removed at startup and on each upload or fetch.
 
 ## Tests
 

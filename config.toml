@@ -10,3 +10,8 @@ timeout = 30
 host = "0.0.0.0"
 # 8080 and 8081 are taken on the Mac Mini.
 port = 8090
+
+[library]
+# Where kept pictures and their crop settings live. A relative path starts at
+# this folder; "~" is your home folder.
+path = "data/library"

@@ -70,6 +70,7 @@ const downloadFilenameInput = document.getElementById('download-filename');
 const resetBtn = document.getElementById('reset-btn');
 const resultImage = document.getElementById('result-image');
 const sendBtn = document.getElementById('send-btn');
+const saveBtn = document.getElementById('save-btn');
 const showToggle = document.getElementById('show-toggle');
 const sendStatus = document.getElementById('send-status');
 const letterboxToggle = document.getElementById('letterbox-toggle');
@@ -362,7 +363,7 @@ function initializeCropper() {
     cropImage.src = state.uploadedImageUrl;
     cropImage.decode().then(createCropper).catch(() => {
         if (cropImage.src.endsWith(state.uploadedImageUrl)) {
-            // Also what an expired source handed over by the gallery looks like.
+            // Also what a source deleted from the library since it was handed over looks like.
             showUploadStatus('Could not display that picture. Please choose it again.', 'error');
             cropSection.style.display = 'none';
             processSection.style.display = 'none';
@@ -490,8 +491,9 @@ function showResult(data) {
     const nameWithoutExt = data.suggested_filename.replace(/\.jpg$/i, '');
     downloadFilenameInput.value = nameWithoutExt;
 
-    // A fresh result has not been sent yet
+    // A fresh result has not been sent or saved yet
     sendBtn.disabled = false;
+    saveBtn.disabled = false;
     sendStatus.textContent = '';
 
     showProcessStatus('Processing complete!', 'success');
@@ -511,6 +513,12 @@ function showProcessStatus(message, type) {
 // Send to TV
 function initializeSend() {
     sendBtn.addEventListener('click', sendToTV);
+    saveBtn.addEventListener('click', saveToLibrary);
+}
+
+// The library keeps the result under the name in the filename box.
+function keptName() {
+    return downloadFilenameInput.value.trim();
 }
 
 async function sendToTV() {
@@ -527,13 +535,15 @@ async function sendToTV() {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ show: showToggle.checked })
+            body: JSON.stringify({ show: showToggle.checked, name: keptName() })
         });
 
         const data = await readJson(response);
 
         if (response.ok) {
             // The button stays disabled so the same result is not sent twice.
+            // Sending kept it in the library, so there is nothing left to save.
+            saveBtn.disabled = true;
             if (data.warning) {
                 showSendStatus(data.warning, 'error');
             } else if (data.shown) {
@@ -550,6 +560,38 @@ async function sendToTV() {
     } catch (error) {
         showSendStatus('Send failed: ' + error.message, 'error');
         sendBtn.disabled = false;
+    }
+}
+
+// Keep the result for later without sending it.
+async function saveToLibrary() {
+    if (!state.resultUrl) {
+        return;
+    }
+
+    saveBtn.disabled = true;
+    showSendStatus('Saving...', 'loading');
+
+    try {
+        const response = await fetch(`${state.resultUrl}/save`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ name: keptName() })
+        });
+
+        const data = await readJson(response);
+
+        if (response.ok) {
+            showSendStatus(`Saved to the library as ${data.name}.`, 'success');
+        } else {
+            showSendStatus(errorText(data, 'Save failed'), 'error');
+            saveBtn.disabled = false;
+        }
+    } catch (error) {
+        showSendStatus('Save failed: ' + error.message, 'error');
+        saveBtn.disabled = false;
     }
 }
 

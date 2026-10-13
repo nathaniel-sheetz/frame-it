@@ -1,5 +1,10 @@
-"""HTTP API for the picture editor: bring in a source, process it, send the result to the TV."""
+"""HTTP API for the picture editor: bring in a source, process it, send the result to the TV.
+
+Sources are kept in the library as soon as they arrive. A processed result is a
+working file until it is sent or saved, when it joins them.
+"""
 import io
+import json
 import logging
 import re
 import time
@@ -11,8 +16,7 @@ from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
-from . import editor, fetch, images
-from .tv import TVUnavailable
+from . import editor, fetch, sending
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +58,11 @@ class DiptychRequest(BaseModel):
 
 class SendRequest(BaseModel):
     show: bool = False
+    name: str | None = Field(None, max_length=200)
+
+
+class SaveRequest(BaseModel):
+    name: str | None = Field(None, max_length=200)
 
 
 class FetchRequest(BaseModel):
@@ -66,7 +75,7 @@ class SourceSendRequest(BaseModel):
 
 
 def _sweep(folder: Path) -> None:
-    """Delete working files left over from earlier sessions.
+    """Delete working files left over from earlier sessions. Never used on the library.
 
     Best effort: a file that cannot be removed (open elsewhere on Windows) is
     left for the next sweep, and a folder deleted while running is recreated.
@@ -92,13 +101,12 @@ def _download_name(name: str | None, fallback: str) -> str:
     return name if name.lower().endswith(".jpg") else f"{name}.jpg"
 
 
-def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
+def create_router(tv, library, processed_dir: Path) -> APIRouter:
     router = APIRouter(prefix="/api/editor")
-    for folder in (upload_dir, processed_dir):
-        _sweep(folder)
+    _sweep(processed_dir)
 
     def source_path(name: str) -> Path:
-        path = upload_dir / name
+        path = library.path(name)
         if not _SOURCE_NAME.fullmatch(name) or not path.is_file():
             raise HTTPException(404, "File not found")
         return path
@@ -114,7 +122,13 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
             raise HTTPException(400, "Invalid preset")
         return editor.PRESETS[preset]
 
-    def result(output: Path, suggested_filename: str) -> dict:
+    def result(output: Path, suggested_filename: str, recipe: dict, sources: list[tuple[str, Crop]]) -> dict:
+        # Kept beside the result, and swept with it, in case it is sent or saved.
+        output.with_suffix(".json").write_text(json.dumps({
+            "name": suggested_filename,
+            "recipe": recipe,
+            "parents": [{"id": Path(name).stem, "crop": crop.model_dump()} for name, crop in sources],
+        }))
         return {
             "success": True,
             "filename": output.name,
@@ -123,54 +137,47 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
             "download_url": f"/api/editor/result/{output.name}?download=1",
         }
 
-    def store(data: bytes, original_filename: str, refusal: str = "Invalid file type") -> dict:
-        """Check that the bytes are a picture the editor accepts and keep them as a source."""
+    def keep(path: Path, name: str | None) -> dict:
+        """Move a processed result into the library, with the settings that made it."""
+        try:
+            draft = json.loads(path.with_suffix(".json").read_text())
+        except (OSError, ValueError):
+            draft = {"name": f"frame_tv_{path.name}", "recipe": None, "parents": []}
+        return library.keep_result(
+            path.read_bytes(), _download_name(name, draft["name"]), draft["recipe"],
+            [(parent["id"], parent["crop"]) for parent in draft["parents"]], image_id=path.stem,
+        )
+
+    def store(data: bytes, original_filename: str, origin: str, origin_url: str | None = None,
+              refusal: str = "Invalid file type") -> dict:
+        """Check that the bytes are a picture the editor accepts and keep them in the library."""
         try:
             with Image.open(io.BytesIO(data), formats=["JPEG", "PNG", "WEBP", "BMP"]) as img:
                 extension = FORMATS.get(img.format)
                 if not extension:
                     raise HTTPException(400, refusal)
-                width, height = ImageOps.exif_transpose(img).size
+                oriented = ImageOps.exif_transpose(img)
         except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError):
             raise HTTPException(400, refusal)
 
-        _sweep(upload_dir)
         _sweep(processed_dir)
-        name = f"{uuid.uuid4().hex}.{extension}"
-        (upload_dir / name).write_bytes(data)
+        # A picture the library already holds comes back as the entry it has.
+        image = library.add_original(data, original_filename, extension, oriented, origin, origin_url)
         return {
             "success": True,
-            "filename": name,
-            "original_filename": original_filename,
-            "width": width,
-            "height": height,
-            "url": f"/api/editor/source/{name}",
+            "filename": image["file"],
+            "original_filename": image["name"],
+            "width": image["width"],
+            "height": image["height"],
+            "url": f"/api/editor/source/{image['file']}",
         }
-
-    def deliver(data: bytes, show: bool) -> dict:
-        try:
-            content_id = tv.upload(data)
-        except TVUnavailable as e:
-            raise HTTPException(503, str(e))
-        if not content_id:
-            raise HTTPException(502, "The TV did not confirm the upload.")
-        sent = {"id": content_id, "selected": show, "shown": False}
-        if show:
-            try:
-                sent["shown"] = tv.select(content_id)
-            except TVUnavailable:
-                # The picture is on the TV by now, so this is not an error to retry:
-                # sending again would upload a second copy.
-                sent["selected"] = False
-                sent["warning"] = "Sent to the TV, but it could not be put on display."
-        return sent
 
     @router.post("/upload")
     def upload(file: UploadFile = File(...)):
         data = file.file.read(MAX_UPLOAD_BYTES + 1)
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "File too large. Maximum size is 50MB.")
-        return store(data, file.filename or "image.jpg")
+        return store(data, file.filename or "image.jpg", "upload")
 
     @router.post("/fetch")
     def fetch_link(req: FetchRequest):
@@ -178,7 +185,8 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
             data, name = fetch.fetch(req.url, MAX_UPLOAD_BYTES)
         except fetch.FetchError as e:
             raise HTTPException(e.status, str(e))
-        return store(data, name, "That link is not a picture this app can use (JPEG, PNG, WEBP or BMP).")
+        return store(data, name, "link", req.url,
+                     "That link is not a picture this app can use (JPEG, PNG, WEBP or BMP).")
 
     @router.get("/source/{name}")
     def source(name: str):
@@ -187,11 +195,11 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
     @router.post("/source/{name}/send")
     def send_source(name: str, req: SourceSendRequest = SourceSendRequest()):
         # The quick path, skipping the editor: the same automatic fit as POST /api/art.
-        try:
-            jpeg = images.prepare(source_path(name).read_bytes(), req.crop)
-        except images.BadImage as e:
-            raise HTTPException(400, str(e))
-        return deliver(jpeg, req.show)
+        source_path(name)
+        original = library.get(Path(name).stem)
+        if not original:
+            raise HTTPException(404, "File not found")
+        return sending.send_fitted(tv, library, original, f"{_stem(original['name'])}_fit.jpg", req.crop, req.show)
 
     @router.post("/process")
     def process(req: ProcessRequest):
@@ -208,7 +216,8 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
             # Logged, not returned: the message carries server paths.
             log.exception("Editor processing failed")
             raise HTTPException(500, "Processing failed.")
-        return result(output, f"{_stem(req.original_filename)}_{req.preset}.jpg")
+        recipe = {"type": "single", "preset": req.preset, "letterbox": req.letterbox}
+        return result(output, f"{_stem(req.original_filename)}_{req.preset}.jpg", recipe, [(req.filename, req.crop)])
 
     @router.post("/process-diptych")
     def process_diptych(req: DiptychRequest):
@@ -228,7 +237,8 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
             log.exception("Editor processing failed")
             raise HTTPException(500, "Processing failed.")
         name = f"{_stem(req.original_filename1)}_{_stem(req.original_filename2)}_pair_{req.preset}.jpg"
-        return result(output, name)
+        recipe = {"type": "pair", "preset": req.preset, "gap_percent": gap_percent}
+        return result(output, name, recipe, [(req.filename1, req.crop1), (req.filename2, req.crop2)])
 
     @router.get("/result/{filename}")
     def get_result(filename: str, download: bool = False, name: str | None = None):
@@ -240,6 +250,13 @@ def create_router(tv, upload_dir: Path, processed_dir: Path) -> APIRouter:
     @router.post("/result/{filename}/send")
     def send(filename: str, req: SendRequest = SendRequest()):
         # The processed JPEG goes to the TV byte-for-byte; no second re-encode.
-        return deliver(result_path(filename).read_bytes(), req.show)
+        path = result_path(filename)
+        sent = sending.deliver(tv, path.read_bytes(), req.show)
+        return sending.record(library, sent, lambda: keep(path, req.name))
+
+    @router.post("/result/{filename}/save")
+    def save(filename: str, req: SaveRequest = SaveRequest()):
+        image = keep(result_path(filename), req.name)
+        return {"success": True, "id": image["id"], "name": image["name"]}
 
     return router

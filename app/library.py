@@ -1,0 +1,305 @@
+"""The picture library: every original brought in, and every result sent to the TV or saved.
+
+Nothing here talks to the TV. It records which pictures have a copy on it, and
+is told when that changes.
+"""
+import hashlib
+import io
+import json
+import sqlite3
+import threading
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+from PIL import Image
+
+BUILDING_BLOCK = "building-block"
+THUMB_SIZE = (480, 480)
+# An automatic fit that keeps less than this much of a picture means it needs work first.
+MIN_KEPT = 0.90
+# Narrower than this after the fit, a picture is stretched more than 2x to fill the screen.
+MIN_FIT_WIDTH = 1920
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS images (
+    id TEXT PRIMARY KEY,
+    file TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('original', 'result')),
+    name TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    bytes INTEGER NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE,
+    origin TEXT NOT NULL,
+    origin_url TEXT,
+    recipe TEXT,
+    added_at TEXT NOT NULL,
+    last_shown_at TEXT
+);
+CREATE TABLE IF NOT EXISTS parents (
+    image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    parent_id TEXT REFERENCES images(id) ON DELETE SET NULL,
+    position INTEGER NOT NULL,
+    crop TEXT,
+    PRIMARY KEY (image_id, position)
+);
+CREATE TABLE IF NOT EXISTS tags (
+    image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (image_id, tag)
+);
+CREATE TABLE IF NOT EXISTS tv_copies (
+    id INTEGER PRIMARY KEY,
+    image_id TEXT NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+    content_id TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    removed_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS tv_copies_open ON tv_copies(content_id) WHERE removed_at IS NULL;
+"""
+
+
+class StillOnTV(Exception):
+    """The picture has a copy on the TV, so it cannot be deleted yet."""
+
+
+def is_building_block(width: int, height: int) -> bool:
+    """Whether a picture needs cropping, pairing or enlarging before it suits the screen."""
+    fit_width = min(width, height * 16 / 9)
+    kept = fit_width * (fit_width * 9 / 16) / (width * height)
+    return kept < MIN_KEPT or fit_width < MIN_FIT_WIDTH
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _thumbnail(image: Image.Image) -> bytes:
+    """A small JPEG of the picture. Shrinks the image it is given."""
+    image.thumbnail(THUMB_SIZE)
+    out = io.BytesIO()
+    image.convert("RGB").save(out, format="JPEG", quality=80)
+    return out.getvalue()
+
+
+class Library:
+    def __init__(self, root: Path):
+        self.root = Path(root)
+        self.files = self.root / "files"
+        self.thumbs = self.root / "thumbs"
+        for folder in (self.files, self.thumbs):
+            folder.mkdir(parents=True, exist_ok=True)
+        # One writer at a time, so the same picture arriving twice at once is still one entry.
+        self._lock = threading.Lock()
+        with self._db() as db:
+            db.executescript(_SCHEMA)
+
+    @contextmanager
+    def _db(self):
+        db = sqlite3.connect(self.root / "library.db", timeout=30)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys = ON")
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def path(self, file: str) -> Path:
+        return self.files / file
+
+    def thumb_path(self, image_id: str) -> Path:
+        return self.thumbs / f"{image_id}.jpg"
+
+    def _add(self, db, image_id, data, extension, thumb, **columns) -> None:
+        file = f"{image_id}.{extension}"
+        self.path(file).write_bytes(data)
+        self.thumb_path(image_id).write_bytes(thumb)
+        row = {"id": image_id, "file": file, "bytes": len(data), "added_at": _now(), **columns}
+        db.execute(
+            f"INSERT INTO images ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+            list(row.values()),
+        )
+
+    def add_original(self, data: bytes, name: str, extension: str, image: Image.Image,
+                     origin: str, origin_url: str | None = None) -> dict:
+        """Keep a picture that was brought in. The same bytes a second time are the same entry.
+
+        `image` is the decoded picture, turned the way it is displayed. It is shrunk here.
+        """
+        sha256 = hashlib.sha256(data).hexdigest()
+        with self._lock, self._db() as db:
+            known = db.execute("SELECT id FROM images WHERE sha256 = ?", (sha256,)).fetchone()
+            if known:
+                return self._get(db, known["id"])
+            image_id = uuid.uuid4().hex
+            width, height = image.size
+            self._add(db, image_id, data, extension, _thumbnail(image), kind="original", name=name,
+                      width=width, height=height, sha256=sha256, origin=origin, origin_url=origin_url)
+            if is_building_block(width, height):
+                db.execute("INSERT INTO tags (image_id, tag) VALUES (?, ?)", (image_id, BUILDING_BLOCK))
+            return self._get(db, image_id)
+
+    def keep_result(self, data: bytes, name: str, recipe: dict | None, parents: list[tuple[str, dict | None]],
+                    origin: str = "editor", image_id: str | None = None) -> dict:
+        """Keep a JPEG made for the TV, with what it was made from and how.
+
+        `parents` are (library id, crop) in order. Keeping the same result again changes nothing.
+        """
+        sha256 = hashlib.sha256(data).hexdigest()
+        with self._lock, self._db() as db:
+            known = db.execute("SELECT id FROM images WHERE sha256 = ? OR id = ?", (sha256, image_id)).fetchone()
+            if known:
+                return self._get(db, known["id"])
+            image_id = image_id or uuid.uuid4().hex
+            with Image.open(io.BytesIO(data)) as image:
+                width, height = image.size
+                thumb = _thumbnail(image)
+            self._add(db, image_id, data, "jpg", thumb, kind="result", name=name, width=width, height=height,
+                      sha256=sha256, origin=origin, recipe=json.dumps(recipe) if recipe else None)
+            for position, (parent_id, crop) in enumerate(parents, start=1):
+                # An original deleted since the result was made leaves a gap, not an error.
+                held = db.execute("SELECT 1 FROM images WHERE id = ?", (parent_id,)).fetchone()
+                db.execute(
+                    "INSERT INTO parents (image_id, parent_id, position, crop) VALUES (?, ?, ?, ?)",
+                    (image_id, parent_id if held else None, position, json.dumps(crop) if crop else None),
+                )
+            return self._get(db, image_id)
+
+    def _describe(self, row, tags: set, copies: list[str], used_in: int) -> dict:
+        tagged = BUILDING_BLOCK in tags
+        if copies:
+            status = "on-tv"
+        elif tagged:
+            status = "block"
+        elif row["kind"] == "result" or not used_in:
+            status = "ready"
+        else:
+            # An original that suits the screen and has already been made into a picture.
+            status = "original"
+        return {
+            "id": row["id"],
+            "file": row["file"],
+            "kind": row["kind"],
+            "name": row["name"],
+            "width": row["width"],
+            "height": row["height"],
+            "bytes": row["bytes"],
+            "added_at": row["added_at"],
+            "last_shown_at": row["last_shown_at"],
+            "status": status,
+            "building_block": tagged,
+            "tv": copies,
+            "used_in": used_in,
+        }
+
+    def _get(self, db, image_id: str) -> dict | None:
+        row = db.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+        if not row:
+            return None
+        tags = {r["tag"] for r in db.execute("SELECT tag FROM tags WHERE image_id = ?", (image_id,))}
+        copies = [r["content_id"] for r in db.execute(
+            "SELECT content_id FROM tv_copies WHERE image_id = ? AND removed_at IS NULL ORDER BY id", (image_id,))]
+        used_in = db.execute("SELECT COUNT(*) FROM parents WHERE parent_id = ?", (image_id,)).fetchone()[0]
+        image = self._describe(row, tags, copies, used_in)
+        image["recipe"] = json.loads(row["recipe"]) if row["recipe"] else None
+        image["parents"] = [
+            {
+                "id": r["parent_id"],
+                "file": r["file"],
+                "name": r["name"],
+                "crop": json.loads(r["crop"]) if r["crop"] else None,
+            }
+            for r in db.execute(
+                "SELECT p.parent_id, p.crop, i.file, i.name FROM parents p"
+                " LEFT JOIN images i ON i.id = p.parent_id WHERE p.image_id = ? ORDER BY p.position", (image_id,))
+        ]
+        return image
+
+    def get(self, image_id: str) -> dict | None:
+        """One picture, with its recipe and the originals it was made from."""
+        with self._db() as db:
+            return self._get(db, image_id)
+
+    def list(self) -> list[dict]:
+        """Every picture, newest first."""
+        with self._db() as db:
+            tags, copies, used_in = {}, {}, {}
+            for r in db.execute("SELECT image_id, tag FROM tags"):
+                tags.setdefault(r["image_id"], set()).add(r["tag"])
+            for r in db.execute("SELECT image_id, content_id FROM tv_copies WHERE removed_at IS NULL ORDER BY id"):
+                copies.setdefault(r["image_id"], []).append(r["content_id"])
+            for r in db.execute("SELECT parent_id, COUNT(*) AS n FROM parents WHERE parent_id IS NOT NULL GROUP BY parent_id"):
+                used_in[r["parent_id"]] = r["n"]
+            return [
+                self._describe(row, tags.get(row["id"], set()), copies.get(row["id"], []), used_in.get(row["id"], 0))
+                for row in db.execute("SELECT * FROM images ORDER BY added_at DESC, rowid DESC")
+            ]
+
+    def tag(self, image_id: str) -> None:
+        with self._db() as db:
+            db.execute("INSERT OR IGNORE INTO tags (image_id, tag) VALUES (?, ?)", (image_id, BUILDING_BLOCK))
+
+    def untag(self, image_id: str) -> None:
+        with self._db() as db:
+            db.execute("DELETE FROM tags WHERE image_id = ? AND tag = ?", (image_id, BUILDING_BLOCK))
+
+    def record_sent(self, image_id: str, content_id: str) -> None:
+        """Note that the TV now holds this picture under `content_id`."""
+        with self._db() as db:
+            # Whatever the TV called by that id before is gone if it is handing the id out again.
+            db.execute("UPDATE tv_copies SET removed_at = ? WHERE content_id = ? AND removed_at IS NULL", (_now(), content_id))
+            db.execute("INSERT INTO tv_copies (image_id, content_id, sent_at) VALUES (?, ?, ?)", (image_id, content_id, _now()))
+
+    def close_copy(self, content_id: str) -> None:
+        """Note that the TV no longer holds `content_id`. The library picture stays."""
+        with self._db() as db:
+            db.execute("UPDATE tv_copies SET removed_at = ? WHERE content_id = ? AND removed_at IS NULL", (_now(), content_id))
+
+    def shown(self, content_id: str) -> None:
+        """Note that the TV has this copy on display now."""
+        with self._db() as db:
+            db.execute(
+                "UPDATE images SET last_shown_at = ? WHERE id IN"
+                " (SELECT image_id FROM tv_copies WHERE content_id = ? AND removed_at IS NULL)", (_now(), content_id))
+
+    def reconcile(self, on_tv: set[str], current: str | None, art_mode: bool) -> dict[str, dict]:
+        """Bring the record of TV copies in line with what the TV reports.
+
+        Copies removed some other way (the remote, the phone app) are closed. Returns
+        the library picture behind each content id that is still there.
+        """
+        with self._db() as db:
+            held = {r["content_id"]: {"id": r["id"], "name": r["name"]} for r in db.execute(
+                "SELECT c.content_id, i.id, i.name FROM tv_copies c JOIN images i ON i.id = c.image_id"
+                " WHERE c.removed_at IS NULL")}
+            for content_id in held.keys() - on_tv:
+                db.execute("UPDATE tv_copies SET removed_at = ? WHERE content_id = ? AND removed_at IS NULL", (_now(), content_id))
+            if art_mode and current in held and current in on_tv:
+                db.execute("UPDATE images SET last_shown_at = ? WHERE id = ?", (_now(), held[current]["id"]))
+            return {content_id: image for content_id, image in held.items() if content_id in on_tv}
+
+    def delete(self, image_id: str) -> None:
+        """Remove a picture and its files. Pictures made from it stay, without their original."""
+        with self._lock, self._db() as db:
+            row = db.execute("SELECT file FROM images WHERE id = ?", (image_id,)).fetchone()
+            if not row:
+                return
+            if db.execute("SELECT 1 FROM tv_copies WHERE image_id = ? AND removed_at IS NULL", (image_id,)).fetchone():
+                raise StillOnTV(image_id)
+            db.execute("DELETE FROM images WHERE id = ?", (image_id,))
+            self.path(row["file"]).unlink(missing_ok=True)
+            self.thumb_path(image_id).unlink(missing_ok=True)
+
+
+def summary(images: list[dict]) -> dict:
+    """How many pictures there are, under each filter, and the disk space they take."""
+    return {
+        "count": len(images),
+        "bytes": sum(image["bytes"] for image in images),
+        "on_tv": sum(image["status"] == "on-tv" for image in images),
+        "ready": sum(image["status"] == "ready" for image in images),
+        "blocks": sum(image["building_block"] for image in images),
+    }

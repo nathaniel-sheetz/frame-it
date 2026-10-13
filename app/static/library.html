@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library · Frame TV Art</title>
+<link rel="stylesheet" href="/static/site.css">
+<style>
+  #filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  #filters button.chosen { border-color: var(--accent); color: var(--accent); }
+  #filters .n { color: var(--muted); margin-left: 4px; }
+
+  .thumb a { display: block; height: 100%; }
+  .labels { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; }
+  .label {
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    background: var(--panel); color: var(--muted); border: 1px solid var(--line);
+  }
+  .label.on-tv { background: var(--accent); border-color: var(--accent); color: #1a1405; }
+  .label.ready { background: var(--ok); border-color: var(--ok); color: #0c1f13; }
+  .label.block { background: #5b8fd9; border-color: #5b8fd9; color: #08111f; }
+
+  .name { padding: 8px 12px 0; overflow-wrap: anywhere; }
+  .meta { padding-top: 2px; }
+  .actions a.nav-link { text-align: center; }
+  .more { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 0 12px 12px; }
+  .more button {
+    border: 0; padding: 0; background: none; color: var(--muted); font-size: 12px; text-decoration: underline;
+  }
+  .more button:hover:not(:disabled) { color: var(--text); }
+  .more button.danger:hover:not(:disabled) { color: var(--danger); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Library</h1>
+  <span id="count" class="pill" hidden></span>
+  <span id="state" class="pill err" hidden>TV unreachable: "On TV" may be out of date</span>
+  <span class="spacer"></span>
+  <a class="nav-link" href="/">Gallery</a>
+  <a class="nav-link" href="/editor">Editor</a>
+  <button id="pick" class="primary">Add pictures</button>
+  <input type="file" id="files" accept="image/jpeg,image/png,image/webp,image/bmp" multiple hidden>
+</header>
+<main>
+  <div id="filters"></div>
+  <div id="msg"></div>
+  <div id="grid"></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const grid = $('grid'), msg = $('msg');
+
+const FILTERS = [
+  { key: 'all', text: 'All', count: d => d.count, has: () => true },
+  { key: 'on-tv', text: 'On TV', count: d => d.on_tv, has: p => p.status === 'on-tv' },
+  { key: 'ready', text: 'Ready', count: d => d.ready, has: p => p.status === 'ready' },
+  { key: 'blocks', text: 'Building blocks', count: d => d.blocks, has: p => p.building_block },
+];
+const LABELS = { 'on-tv': 'On TV', ready: 'Ready', block: 'Building block', original: 'Original' };
+
+let busy = false;
+let data = { items: [], count: 0 };
+// Kept in the address, so a reload or a bookmark comes back to the same filter.
+let filter = FILTERS.find(f => f.key === location.hash.slice(1)) || FILTERS[0];
+
+function say(text, isError = false) {
+  msg.textContent = text;
+  msg.className = isError ? 'err' : '';
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `Request failed (${res.status})`);
+  return body;
+}
+
+function setBusy(value) {
+  busy = value;
+  document.querySelectorAll('button').forEach(b => b.disabled = value);
+}
+
+function size(bytes) {
+  const units = ['bytes', 'KB', 'MB', 'GB'];
+  let i = 0;
+  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+  return `${i ? bytes.toFixed(bytes < 10 ? 1 : 0) : bytes} ${units[i]}`;
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+async function load() {
+  data = await api('/api/library');
+  $('count').textContent = `${plural(data.count, 'picture')} · ${size(data.bytes)}`;
+  $('count').hidden = false;
+  render();
+}
+
+function button(text, onclick, className = '') {
+  const b = document.createElement('button');
+  b.textContent = text;
+  b.className = className;
+  b.disabled = busy;
+  b.onclick = onclick;
+  return b;
+}
+
+function editLink(picture) {
+  const a = document.createElement('a');
+  a.className = 'nav-link';
+  a.textContent = 'Edit';
+  a.href = '/editor?' + new URLSearchParams({ source: picture.file, name: picture.name });
+  return a;
+}
+
+function label(text, className) {
+  const span = document.createElement('span');
+  span.className = `label ${className}`;
+  span.textContent = text;
+  return span;
+}
+
+function render() {
+  const filters = $('filters');
+  filters.replaceChildren(...FILTERS.map(f => {
+    const b = button(f.text, () => { filter = f; history.replaceState(null, '', `#${f.key}`); render(); },
+      f === filter ? 'chosen' : '');
+    const n = document.createElement('span');
+    n.className = 'n';
+    n.textContent = f.count(data);
+    b.append(n);
+    return b;
+  }));
+
+  const pictures = data.items.filter(filter.has);
+  grid.replaceChildren();
+  if (!pictures.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = data.count
+      ? 'No pictures under this filter.'
+      : 'Nothing in the library yet. Every picture you add here, in the gallery or in the editor is kept.';
+    grid.append(empty);
+    return;
+  }
+  for (const picture of pictures) grid.append(card(picture));
+}
+
+function card(picture) {
+  const el = document.createElement('div');
+  el.className = 'card';
+
+  const thumb = document.createElement('div');
+  thumb.className = 'thumb';
+  const full = document.createElement('a');
+  full.href = `/api/library/${picture.id}/file`;
+  full.target = '_blank';
+  full.title = 'Open the full picture';
+  const img = document.createElement('img');
+  img.loading = 'lazy';
+  img.alt = picture.name;
+  img.src = `/api/library/${picture.id}/thumb`;
+  full.append(img);
+  const labels = document.createElement('div');
+  labels.className = 'labels';
+  labels.append(label(LABELS[picture.status], picture.status));
+  // On the TV and tagged: the first label says where it is, this one that it is a block too.
+  if (picture.building_block && picture.status !== 'block') labels.append(label(LABELS.block, 'block'));
+  thumb.append(full, labels);
+
+  const name = document.createElement('div');
+  name.className = 'name';
+  name.textContent = picture.name;
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = `${picture.width}×${picture.height} · ${size(picture.bytes)}`
+    + (picture.used_in ? ` · used in ${plural(picture.used_in, 'picture')}` : '');
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  if (picture.status === 'on-tv') {
+    actions.append(button('Display', () => display(picture)), button('Remove from TV', () => removeFromTV(picture)));
+  } else if (picture.status === 'ready') {
+    actions.append(button('Send to TV', () => send(picture), 'primary'));
+  }
+  // A result is edited again from its original, which comes with the next change to the editor.
+  if (picture.kind === 'original' || picture.building_block) actions.append(editLink(picture));
+
+  const more = document.createElement('div');
+  more.className = 'more';
+  more.append(picture.building_block
+    ? button('Remove building block tag', () => setTag(picture, false))
+    : button('Mark as building block', () => setTag(picture, true)));
+  if (picture.status !== 'on-tv') more.append(button('Delete', () => remove(picture), 'danger'));
+
+  el.append(thumb, name, meta, actions, more);
+  return el;
+}
+
+async function run(label, fn) {
+  if (busy) return;
+  setBusy(true);
+  say(label);
+  try {
+    say(await fn());
+  } catch (e) {
+    say(e.message, true);
+  }
+  busy = false;
+  await load().catch(e => say(e.message, true));
+  setBusy(false);
+}
+
+function send(picture) {
+  run('Sending to the TV…', async () => {
+    const r = await api(`/api/library/${picture.id}/send`, { method: 'POST' });
+    if (r.warning) throw new Error(r.warning);
+    return picture.kind === 'original'
+      ? 'Sent to the TV, fitted to the screen. The fitted copy is in the library too.'
+      : 'Sent to the TV.';
+  });
+}
+
+function display(picture) {
+  run('Setting artwork…', async () => {
+    const r = await api(`/api/library/${picture.id}/display`, { method: 'POST' });
+    return r.shown ? 'Now on display.' : 'Selected. Art Mode is off, so it was not put on screen.';
+  });
+}
+
+function removeFromTV(picture) {
+  if (!confirm(`Remove ${picture.name} from the TV? It stays in the library.`)) return;
+  run('Removing from the TV…', async () => {
+    await api(`/api/library/${picture.id}/remove-from-tv`, { method: 'POST' });
+    return 'Removed from the TV.';
+  });
+}
+
+function setTag(picture, tagged) {
+  run('', async () => {
+    await api(`/api/library/${picture.id}/tags/building-block`, { method: tagged ? 'PUT' : 'DELETE' });
+    return '';
+  });
+}
+
+function remove(picture) {
+  const question = picture.used_in
+    ? `Delete ${picture.name} from the library? ${plural(picture.used_in, 'picture')} made from it will stay, but can no longer be edited again.`
+    : `Delete ${picture.name} from the library? This cannot be undone.`;
+  if (!confirm(question)) return;
+  run('Deleting…', async () => {
+    await api(`/api/library/${picture.id}`, { method: 'DELETE' });
+    return 'Deleted.';
+  });
+}
+
+function add(files) {
+  run('', async () => {
+    const before = data.count;
+    let added = 0;
+    const refused = [];
+    for (const file of files) {
+      say(`Adding ${file.name} (${added + refused.length + 1} of ${files.length})…`);
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        await api('/api/editor/upload', { method: 'POST', body: form });
+        added++;
+      } catch (e) {
+        refused.push(`${file.name}: ${e.message}`);
+      }
+    }
+    if (refused.length) throw new Error(`Added ${added} of ${files.length}. Not added: ${refused.join('; ')}`);
+    // The same picture a second time is not a second entry, so count what is actually new.
+    const fresh = (await api('/api/library')).count - before;
+    return `Added ${plural(fresh, 'picture')}.` + (fresh < added ? ` ${added - fresh} already in the library.` : '');
+  });
+}
+
+$('pick').onclick = () => $('files').click();
+$('files').onchange = e => { if (e.target.files.length) add([...e.target.files]); e.target.value = ''; };
+
+// The library does not need the TV, but only the TV knows what has been removed with
+// the remote. Asking for the gallery's list brings the "On TV" labels up to date.
+async function start() {
+  await load().catch(e => say(e.message, true));
+  try {
+    await api('/api/art');
+    if (!busy) await load();
+  } catch (e) {
+    $('state').hidden = false;
+  }
+}
+
+start();
+</script>
+</body>
+</html>
