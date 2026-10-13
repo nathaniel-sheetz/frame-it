@@ -36,7 +36,21 @@ button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--d
 .nav-link:hover { border-color: var(--muted); }
 .hint { color: var(--muted); }
 
-#msg { min-height: 22px; margin-bottom: 12px; color: var(--muted); }
+/* Where pictures come in: a button, a place to drop them, and a box for a link. */
+#drop {
+  border: 2px dashed var(--line); border-radius: 10px; padding: 20px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-bottom: 20px;
+}
+#drop.over { border-color: var(--accent); background: #1c1a14; }
+#link-form { display: flex; flex: 1 1 320px; gap: 8px; }
+/* 16px, so a phone does not zoom the page in when the box is tapped. */
+#link {
+  flex: 1; min-width: 0; font: inherit; font-size: 16px; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+}
+#link:focus { outline: none; border-color: var(--accent); }
+
+#msg { min-height: 22px; margin-bottom: 12px; color: var(--muted); overflow-wrap: anywhere; }
 #msg.err { color: var(--danger); }
 
 #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }

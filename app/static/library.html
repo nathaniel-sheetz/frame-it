@@ -82,10 +82,17 @@
   <span class="spacer"></span>
   <a class="nav-link" href="/">Gallery</a>
   <a class="nav-link" href="/editor">Editor</a>
-  <button id="pick" class="primary">Add pictures</button>
-  <input type="file" id="files" accept="image/jpeg,image/png,image/webp,image/bmp" multiple hidden>
 </header>
 <main>
+  <div id="drop">
+    <button id="pick" class="primary">Add pictures</button>
+    <span class="hint">or drop pictures or links here (JPEG, PNG, WEBP or BMP, up to 50 MB each)</span>
+    <form id="link-form">
+      <input type="url" id="link" placeholder="Paste a picture link" aria-label="Picture link" required>
+      <button>Add</button>
+    </form>
+    <input type="file" id="files" accept="image/jpeg,image/png,image/webp,image/bmp" multiple hidden>
+  </div>
   <div id="bar">
     <div id="filters"></div>
     <input type="search" id="find" placeholder="Find by name, creator or subject" aria-label="Find pictures">
@@ -500,31 +507,90 @@ function remove(picture) {
   });
 }
 
-function add(files) {
+// Spaces and accented characters are encoded the way the address bar would, so the server can ask for them.
+function encodedLink(url) {
+  try { return new URL(url).href; } catch { return url; }
+}
+
+// Something to add: a name for the messages, and the request that has the server keep it.
+const fromFile = file => ({
+  name: file.name,
+  send() {
+    const form = new FormData();
+    form.append('file', file);
+    return api('/api/editor/upload', { method: 'POST', body: form });
+  },
+});
+const fromLink = url => ({
+  name: url,
+  send: () => api('/api/editor/fetch', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: encodedLink(url) }),
+  }),
+});
+
+// What is going in now. More dropped in the meantime joins the end of it.
+let adding = null;
+
+function add(items) {
+  if (adding) { adding.push(...items); return; }
+  if (busy) return;
+  adding = [...items];
   run('', async () => {
     const before = data.count;
     let added = 0;
     const refused = [];
-    for (const file of files) {
-      say(`Adding ${file.name} (${added + refused.length + 1} of ${files.length})…`);
-      const form = new FormData();
-      form.append('file', file);
+    for (let i = 0; i < adding.length; i++) {
+      const item = adding[i];
+      say(`Adding ${item.name} (${i + 1} of ${adding.length})…`);
       try {
-        await api('/api/editor/upload', { method: 'POST', body: form });
+        await item.send();
         added++;
       } catch (e) {
-        refused.push(`${file.name}: ${e.message}`);
+        refused.push(`${item.name}: ${e.message}`);
       }
     }
-    if (refused.length) throw new Error(`Added ${added} of ${files.length}. Not added: ${refused.join('; ')}`);
+    const total = adding.length;
+    adding = null;
+    if (refused.length) throw new Error(`Added ${added} of ${total}. Not added: ${refused.join('; ')}`);
     // The same picture a second time is not a second entry, so count what is actually new.
     const fresh = (await api('/api/library')).count - before;
     return `Added ${plural(fresh, 'picture')}.` + (fresh < added ? ` ${added - fresh} already in the library.` : '');
   });
 }
 
+function dropped(transfer) {
+  const files = [...transfer.files].filter(f => f.type.startsWith('image/'));
+  // A link, or a picture dragged out of another browser tab. Several links come one to a line.
+  const links = (transfer.getData('text/uri-list') || transfer.getData('text/plain'))
+    .split(/\r?\n/).map(line => line.trim()).filter(line => /^https?:\/\//i.test(line));
+  if (files.length) add(files.map(fromFile));
+  else if (links.length) add([...new Set(links)].map(fromLink));
+  else if (!busy) say('Drop picture files or links to them.', true);
+}
+
 $('pick').onclick = () => $('files').click();
-$('files').onchange = e => { if (e.target.files.length) add([...e.target.files]); e.target.value = ''; };
+$('files').onchange = e => { if (e.target.files.length) add([...e.target.files].map(fromFile)); e.target.value = ''; };
+$('link-form').onsubmit = e => {
+  e.preventDefault();
+  if (busy) return;
+  add([fromLink($('link').value.trim())]);
+  $('link').value = '';
+};
+
+// A card's picture dragged onto the box would come back in as a new, small one,
+// so a drag that started on this page is left alone.
+let ours = false;
+addEventListener('dragstart', () => { ours = true; });
+addEventListener('dragend', () => { ours = false; });
+
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => {
+  if (ours) return;
+  e.preventDefault();
+  drop.classList.add('over');
+}));
+['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => { if (!ours) dropped(e.dataTransfer); });
 
 // The library does not need the TV, but only the TV knows what has been removed with
 // the remote. Asking for the gallery's list brings the "On TV" labels up to date.

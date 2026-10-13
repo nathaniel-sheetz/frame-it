@@ -12,7 +12,8 @@ any browser on the same network.
   straight to the TV. Pictures can come from a file or a link here too.
 - **Library** (`/library`): every picture you have brought in, and every result
   you sent to the TV or saved. Send a picture again, take it off the TV without
-  losing it, or open an original in the editor.
+  losing it, or open an original in the editor. Drop pictures or links here to
+  keep them without sending them anywhere.
 
 ## Library
 
@@ -21,7 +22,9 @@ The library keeps pictures on the computer running the app, in `data/library/`
 `[library] path` in `config.toml`. Nothing in it is deleted automatically.
 
 - **Originals** are kept as soon as they are uploaded or fetched. The same file
-  a second time is the same entry.
+  a second time is the same entry. The box at the top of the library page takes
+  several at once: choose or drop picture files, drop links, or paste one link.
+  A drop that holds files and links adds the files.
 - **Results** (the JPEGs made for the TV) are kept when they are sent, or with
   **Save to library** in the editor. Each remembers its originals and crop
   settings. Results that were processed but neither sent nor saved are removed
