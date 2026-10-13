@@ -35,6 +35,11 @@
   button:disabled { opacity: .5; cursor: default; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #1a1405; font-weight: 600; }
   button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+  .nav-link {
+    color: var(--text); text-decoration: none; border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 12px;
+  }
+  .nav-link:hover { border-color: var(--muted); }
 
   #drop {
     border: 2px dashed var(--line); border-radius: 10px; padding: 20px;
@@ -68,6 +73,7 @@
   <span id="state" class="pill">Connecting…</span>
   <span id="count" class="pill" hidden></span>
   <span class="spacer"></span>
+  <a class="nav-link" href="/editor">Prepare a picture</a>
   <button id="refresh">Refresh</button>
 </header>
 <main>

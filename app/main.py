@@ -2,8 +2,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from . import config, images
+from .editor_routes import create_router
 from .tv import FrameTV, NotAPhoto, TVUnavailable, check_photo_id
 
 cfg = config.load()
@@ -12,6 +14,9 @@ app = FastAPI(title="Frame TV Art")
 
 STATIC = Path(__file__).parent / "static"
 config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
+
+app.include_router(create_router(tv, config.EDITOR_UPLOAD_DIR, config.EDITOR_PROCESSED_DIR))
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 @app.exception_handler(TVUnavailable)
@@ -31,6 +36,11 @@ def _thumb_path(content_id: str) -> Path:
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/editor")
+def editor_page():
+    return FileResponse(STATIC / "editor.html")
 
 
 @app.get("/api/art")

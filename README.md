@@ -1,9 +1,16 @@
 # Frame TV Art
 
 A small web app for managing the "My Photos" artwork on a Samsung Frame TV from
-any browser on the same network: upload, set as current art, and remove.
+any browser on the same network.
+
+- **Gallery** (`/`): see what is on the TV, set the current art, remove pictures,
+  and quick-upload with an automatic centre crop.
+- **Editor** (`/editor`): crop a picture for the Frame's 3840×2160 panel, with
+  optional letterboxing or a side-by-side pair, review the result, and send it
+  straight to the TV.
 
 Built on [NickWaterton/samsung-tv-ws-api](https://github.com/NickWaterton/samsung-tv-ws-api).
+The editor is ported from [image_crop_upscale](https://github.com/nathaniel-sheetz/image_crop_upscale).
 Tested against a QN55LS03D (2024), art API 5.0.1.0.
 
 ## Run
@@ -37,6 +44,23 @@ is saved to `tv-token.txt`.
 | POST | `/api/art` | Upload (`file`, `crop`, `show` form fields) |
 | POST | `/api/art/{id}/select` | Set as current art |
 | DELETE | `/api/art/{id}` | Remove from the TV |
+| POST | `/api/editor/upload` | Upload a source picture to edit (`file` form field, max 50 MB) |
+| GET | `/api/editor/source/{name}` | The uploaded source |
+| POST | `/api/editor/process` | Crop and scale (`filename`, `crop`, `letterbox`, `preset`, `original_filename`) |
+| POST | `/api/editor/process-diptych` | Two crops side by side (`filename1/2`, `crop1/2`, `gap_percent`, `preset`, `original_filename1/2`) |
+| GET | `/api/editor/result/{name}` | The processed JPEG; add `?download=1&name=...` to download |
+| POST | `/api/editor/result/{name}/send` | Send the processed JPEG to the TV unchanged (`show`) |
+
+Editor working files live in `data/editor/`; files older than 24 hours are removed at startup and on each upload.
+
+## Tests
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest
+```
+
+The tests use a fake TV, so they run without one.
 
 ## Probe
 

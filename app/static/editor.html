@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prepare a picture · Frame TV Art</title>
+    <link rel="stylesheet" href="/static/vendor/cropper.min.css">
+    <link rel="stylesheet" href="/static/editor.css">
+</head>
+<body>
+    <header>
+        <h1>Prepare a picture</h1>
+        <span class="spacer"></span>
+        <a class="nav-link" href="/">Back to gallery</a>
+    </header>
+
+    <div class="container">
+        <main>
+            <!-- Upload Section -->
+            <section id="upload-section" class="card">
+                <h2>Step 1: Choose a Picture</h2>
+                <div class="upload-area" id="upload-area">
+                    <input type="file" id="file-input" accept="image/*" hidden>
+                    <div class="upload-prompt">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p>Click to upload or drag and drop</p>
+                        <span class="file-types">PNG, JPG, JPEG, WEBP, BMP (max 50MB)</span>
+                    </div>
+                </div>
+                <div id="upload-status"></div>
+            </section>
+
+            <!-- Crop Section -->
+            <section id="crop-section" class="card" style="display: none;">
+                <h2>Step 2: Crop for the Frame</h2>
+                <p class="instruction">Drag and resize the crop box to select the portion of your image. The result is 3840 × 2160.</p>
+                <div class="letterbox-toggle">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="letterbox-toggle">
+                        <span class="toggle-text">Allow blank space (letterbox)</span>
+                    </label>
+                    <p class="toggle-hint" id="letterbox-hint" style="display: none;">
+                        Crop freely — black bars will be added to fill the frame.
+                    </p>
+                </div>
+                <div class="image-container">
+                    <img id="crop-image" src="" alt="Image to crop">
+                </div>
+                <div class="crop-info" id="crop-info"></div>
+                <div id="diptych-controls" style="display: none;">
+                    <button id="diptych-btn" class="btn btn-secondary">
+                        Add second image (side-by-side pair)
+                    </button>
+                </div>
+            </section>
+
+            <!-- Diptych Upload Section (Step 2b) -->
+            <section id="diptych-upload-section" class="card" style="display: none;">
+                <h2>Step 2b: Choose the Second Picture</h2>
+                <div class="upload-area" id="upload-area-2">
+                    <input type="file" id="file-input-2" accept="image/*" hidden>
+                    <div class="upload-prompt">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <p>Click to upload or drag and drop second image</p>
+                        <span class="file-types">PNG, JPG, JPEG, WEBP, BMP (max 50MB)</span>
+                    </div>
+                </div>
+                <div id="upload-status-2"></div>
+                <button id="diptych-cancel-btn" class="btn btn-secondary btn-sm">Cancel second picture</button>
+            </section>
+
+            <!-- Diptych Crop Section (Step 2c) -->
+            <section id="diptych-crop-section" class="card" style="display: none;">
+                <h2>Step 2c: Crop the Second Picture</h2>
+                <p class="instruction">Aspect ratio is locked to fit alongside image 1</p>
+                <div id="diptych-gap-control" style="display: none;">
+                    <label>Gap size: <span id="gap-px-display">~38px</span></label>
+                    <input type="range" id="gap-slider" min="1" max="10" value="1" step="1">
+                    <span id="gap-percent-display">1%</span>
+                </div>
+                <div class="image-container">
+                    <img id="crop-image-2" src="" alt="Second image to crop">
+                </div>
+                <div class="crop-info" id="crop-info-2"></div>
+                <div id="diptych-refresh-bar" style="display: none;">
+                    <span>The space for Image 2 changed — click Refresh to reset its crop.</span>
+                    <button id="diptych-refresh-btn" class="btn btn-warning btn-sm">Refresh Image 2 crop</button>
+                </div>
+                <div id="diptych-crop-warning" class="warning-text" style="display: none;"></div>
+            </section>
+
+            <!-- Process Section -->
+            <section id="process-section" class="card" style="display: none;">
+                <h2>Step 3: Process</h2>
+                <button id="process-btn" class="btn btn-primary">
+                    Process &amp; Upscale Image
+                </button>
+                <div id="process-status"></div>
+            </section>
+
+            <!-- Review Section -->
+            <section id="download-section" class="card" style="display: none;">
+                <h2>Step 4: Review and Send</h2>
+                <div class="result-preview">
+                    <img id="result-image" src="" alt="Processed picture">
+                </div>
+                <p class="instruction">This is what the TV will show. Not right? Change the crop above and process again.</p>
+                <div class="send-row">
+                    <button id="send-btn" class="btn btn-primary">Send to TV</button>
+                    <label class="toggle-label">
+                        <input type="checkbox" id="show-toggle">
+                        <span class="toggle-text">Display now</span>
+                    </label>
+                </div>
+                <div id="send-status"></div>
+                <div class="filename-edit">
+                    <label for="download-filename">Filename:</label>
+                    <input type="text" id="download-filename" class="filename-input" placeholder="Enter filename">
+                    <span class="filename-extension">.jpg</span>
+                </div>
+                <button id="download-btn" class="btn btn-secondary">
+                    Download
+                </button>
+                <button id="reset-btn" class="btn btn-secondary">
+                    Start over
+                </button>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/vendor/cropper.min.js"></script>
+    <script src="/static/editor.js"></script>
+</body>
+</html>

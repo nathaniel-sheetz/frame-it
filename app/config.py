@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN_FILE = ROOT / "tv-token.txt"
 THUMB_DIR = ROOT / "data" / "thumbs"
+EDITOR_UPLOAD_DIR = ROOT / "data" / "editor" / "uploads"
+EDITOR_PROCESSED_DIR = ROOT / "data" / "editor" / "processed"
 
 
 @dataclass(frozen=True)

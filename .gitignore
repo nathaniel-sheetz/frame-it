@@ -2,3 +2,5 @@
 __pycache__/
 tv-token.txt
 data/
+.gstack/
+todos.md
