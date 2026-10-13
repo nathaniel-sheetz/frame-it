@@ -30,8 +30,10 @@ python -m venv .venv
 Then open `http://<this-computer's-ip>:8090`. The TV's address and the server
 port are in `config.toml`.
 
-The first connection makes the TV show an "Allow" prompt; the resulting token
-is saved to `tv-token.txt`. Each computer pairs separately.
+Each computer pairs with the TV once. The first time the page is opened, the TV
+shows an "Allow" prompt for about 30 seconds; accept it and the resulting token
+is saved to `tv-token.txt`. If the prompt goes unanswered, the page says so and
+reloading it brings the prompt back. To pair again, delete `tv-token.txt`.
 
 ## Always-on host (Mac Mini)
 
@@ -58,7 +60,18 @@ sed -e "s|__USER__|$USER|g" -e "s|__HOME__|$HOME|g" -e "s|__CHECKOUT__|$PWD|g" d
 sudo launchctl bootstrap system /Library/LaunchDaemons/local.frame-tv.plist
 ```
 
-Then open `http://<the-mini>:8090` and accept the "Allow" prompt on the TV.
+Two one-time approvals follow, in this order:
+
+1. **macOS.** The first time the service tries to reach the TV, macOS shows a
+   popup on the Mini's own screen asking whether Python may find devices on the
+   local network. Log in at the Mini, open `http://<the-mini>:8090` from any
+   device to trigger it, and choose Allow. Until then the page says the TV
+   could not be reached (`OSError`). The approval survives restarts and applies
+   before anyone logs in.
+2. **The TV.** Reload the page with someone at the TV to accept its "Allow"
+   prompt, as described under Run.
+
+Then `http://<the-mini>:8090` shows the gallery.
 
 Update to the latest code. Stopping the app is enough to restart it, and needs
 no `sudo` because it runs as you:
@@ -74,7 +87,8 @@ The log is `~/Library/Logs/frame-tv.log`. To remove the service:
 
 ## What it will and won't do to the TV
 
-- Only talks to the art channel. It never sends power or remote-key commands.
+- Only talks to the art channel, apart from opening the remote-control channel
+  once to pair. It never sends power or remote-key commands.
 - Only lists, sets, and removes pictures in "My Photos". Art Store content is
   not touched.
 - If Art Mode is off (someone is watching TV), setting a picture selects it
