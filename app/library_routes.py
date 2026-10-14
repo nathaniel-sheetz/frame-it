@@ -83,11 +83,12 @@ def create_router(tv, library, player=None) -> APIRouter:
             raise HTTPException(404, "That picture's file is missing.")
         if image["kind"] == "original":
             # An original is never sent as it is: the TV gets a copy fitted to the screen.
-            return sending.send_fitted(tv, library, image, f"{_stem(image['name'])}_fit.jpg", True, req.show)
+            return sending.chosen(player, sending.send_fitted(
+                tv, library, image, f"{_stem(image['name'])}_fit.jpg", True, req.show))
         if image["tv"]:
             raise HTTPException(409, "That picture is already on the TV.")
         sent = sending.deliver(tv, library.path(image["file"]).read_bytes(), req.show)
-        return sending.record(library, sent, lambda: image)
+        return sending.chosen(player, sending.record(library, sent, lambda: image))
 
     @router.post("/{image_id}/display")
     def display(image_id: str):

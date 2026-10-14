@@ -3,7 +3,7 @@ import random
 import pytest
 
 from app.library import Library
-from app.player import RETRY, TICK, Player, Refused, neighbour, upcoming
+from app.player import PASS_OVER, RETRY, TICK, Player, Refused, neighbour, upcoming
 from app.playlists import Playlists
 from app.tv import TVUnavailable
 
@@ -208,9 +208,21 @@ class TestStarting:
     def test_an_upload_the_tv_does_not_confirm_is_tried_again_later(self, tv, player, evening):
         tv.confirms_upload = False
         player.play(evening[0])
-        assert player.tick() == RETRY
+        # Each picture is tried once and passed over. With none to put up, the clock waits.
+        assert [player.tick() for _ in range(4)][-1] == RETRY
         assert player.status()['problem'] == 'The TV did not confirm the upload.'
         assert player.status()['state'] == 'sending'
+
+    def test_a_picture_the_tv_will_not_take_is_left_out_and_the_rest_play(self, tv, library, player, clock, evening):
+        playlist_id, (red, green, blue) = evening
+        library.record_sent(red, tv.upload(b'jpeg'))
+        library.record_sent(blue, tv.upload(b'jpeg'))
+        tv.confirms_upload = False
+        begin(player, playlist_id)
+        assert showing(tv, library) == red
+        assert player.status()['problem'] == 'green.jpg is left out for now. The TV did not confirm the upload.'
+        wait(player, clock, 60)
+        assert showing(tv, library) == blue
 
     def test_starting_while_the_tv_is_in_use_selects_without_showing(self, tv, library, player, evening):
         playlist_id, (red, green, blue) = evening
@@ -399,6 +411,24 @@ class TestChangesWhilePlaying:
         wait(player, clock, 180)
         assert showing(tv, library) == white
 
+    def test_an_added_picture_the_tv_will_not_take_does_not_stop_the_clock(self, tv, library, player, clock, evening):
+        playlist_id, (red, green, blue) = evening
+        begin(player, playlist_id)
+        white = picture(library, 'white')
+        player.playlists.add(playlist_id, [white])
+        player.changed()
+        tv.confirms_upload = False
+        wait(player, clock, 30)
+        assert player.status()['counting'] is True
+        assert player.status()['remaining'] == 30
+        assert player.status()['problem'] == 'white.jpg is left out for now. The TV did not confirm the upload.'
+        wait(player, clock, 30)
+        assert showing(tv, library) == green
+        tv.confirms_upload = True
+        wait(player, clock, PASS_OVER)
+        assert library.get(white)['status'] == 'on-tv'
+        assert player.status()['problem'] is None
+
     def test_taking_out_the_picture_that_is_up_moves_on(self, tv, library, player, clock, evening):
         playlist_id, (red, green, blue) = evening
         begin(player, playlist_id)
@@ -477,6 +507,14 @@ class TestAnotherPictureChosen:
         wait(player, clock, TICK)
         assert player.status() is None
         assert player.ended == 'Evening stopped because another picture was chosen.'
+
+    def test_a_tv_that_names_no_picture_is_acted_on_at_the_second_look(self, tv, player, clock, evening):
+        begin(player, evening[0])
+        tv.current = None
+        wait(player, clock, TICK)
+        assert player.status() is not None
+        wait(player, clock, TICK)
+        assert player.status() is None
 
     def test_a_glimpse_of_another_picture_is_not_acted_on(self, tv, player, clock, evening):
         begin(player, evening[0])
@@ -579,3 +617,18 @@ class TestShuffle:
             wait(player, clock, 60)
             seen.append(showing(tv, library))
         assert sorted(seen) == sorted(held)
+
+    def test_another_copy_of_the_picture_that_is_up_keeps_its_time(self, tv, library, playlists, player, clock):
+        playlist = playlists.create('Mixed', 60, shuffle=True)
+        playlists.add(playlist['id'], [picture(library, color) for color in COLORS[:3]])
+        begin(player, playlist['id'])
+        up, cycle = showing(tv, library), player.playlists.playing()['cycle']
+        copy = tv.upload(b'jpeg')
+        library.record_sent(up, copy)
+        wait(player, clock, 30)
+        tv.select(copy)
+        player.chosen(copy, True)
+        assert player.status()['current']['id'] == up
+        assert player.status()['remaining'] == 30
+        assert player.playlists.playing()['content_id'] == copy
+        assert player.playlists.playing()['cycle'] == cycle

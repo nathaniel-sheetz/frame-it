@@ -29,6 +29,13 @@ def deliver(tv, data: bytes, show: bool) -> dict:
     return sent
 
 
+def chosen(player, sent: dict) -> dict:
+    """Tell a running playlist about a picture sent to be displayed. It carries on from it, or stops."""
+    if player and sent["selected"]:
+        player.chosen(sent["id"], sent["shown"])
+    return sent
+
+
 def record(library, sent: dict, keep) -> dict:
     """Note in the library that a picture is now on the TV.
 

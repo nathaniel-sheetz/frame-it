@@ -18,6 +18,10 @@ TICK = 15
 RETRY = 60
 # Between one picture sent and the next, so a press of Stop gets its turn.
 SOON = 0.1
+# How long a picture the TV would not take is passed over before it is tried again.
+PASS_OVER = 600
+# Nothing astray. Not None, which is what the TV reports when it names no picture.
+_NOTHING = object()
 
 log = logging.getLogger(__name__)
 
@@ -90,9 +94,11 @@ class Player:
         # When the picture was last seen on screen, by this process's clock. None while it is not counting.
         self._seen = None
         # A picture the TV was showing instead, the last time it was asked.
-        self._astray = None
+        self._astray = _NOTHING
         # Why the playlist is waiting, in words for the page.
         self._problem = None
+        # Pictures the TV would not take: when it last refused each one, and why.
+        self._refused = {}
         # Why the last playlist stopped by itself.
         self.ended = None
 
@@ -111,6 +117,7 @@ class Player:
                 delay = self.tick()
             except Exception:  # noqa: BLE001 - the clock has to outlive anything one turn runs into
                 log.exception("The playlist clock stumbled")
+                self._seen = None
                 delay = RETRY
             self._wake.wait(delay)
 
@@ -138,16 +145,14 @@ class Player:
                 self._seen = None
                 self._problem = "A picture in the playlist could not be read from the library."
                 return RETRY
-            self._problem = None
+            self._problem = self._passing_over(playlist)
             return delay
 
     def _prepare(self, playlist: dict, playing: dict) -> float:
         """Send one picture the TV does not have yet, or start playing once it has them all."""
         # Whatever was removed with the remote since the app last looked has to be sent again.
         self.library.reconcile(self.tv.photo_ids(), None, False)
-        missing = next((p for p in self.playlists.get(playlist["id"])["pictures"] if not p["on_tv"]), None)
-        if missing:
-            self._send(missing["id"])
+        if self._send_missing(self.playlists.get(playlist["id"])["pictures"]):
             return SOON
         self._step(playlist, playing, 1)
         return TICK
@@ -159,12 +164,12 @@ class Player:
             self._seen = None
             # Acted on the second time it is seen: the TV can take a moment to report a change of picture.
             if self._astray == seen["current"]:
-                self._astray = None
+                self._astray = _NOTHING
                 self._follow(playlist, playing, seen["current"], seen["art_mode"], may_be_gone=True)
             else:
                 self._astray = seen["current"]
             return TICK
-        self._astray = None
+        self._astray = _NOTHING
         if playing["image_id"] not in ids:
             # Taken out of the playlist while it was up.
             self._step(playlist, playing, 1)
@@ -180,17 +185,46 @@ class Player:
                 return TICK
             self.playlists.note(shown_for=shown_for)
         # A picture added since the playlist started, or taken off the TV since, is sent as soon as it is missed.
-        missing = next((p for p in playlist["pictures"] if not p["on_tv"]), None)
-        if missing:
+        return SOON if self._send_missing(playlist["pictures"]) else TICK
+
+    def _send_missing(self, pictures: list[dict]) -> bool:
+        """Send one picture the TV does not have yet. True if there was one to try.
+
+        The TV has just answered, so a picture it will not take (when its storage
+        is full, say) is passed over for a while instead of holding up the rest.
+        """
+        missing = next((p for p in pictures if not p["on_tv"] and not self._passed_over(p["id"])), None)
+        if not missing:
+            return False
+        try:
             self._send(missing["id"])
-            return SOON
-        return TICK
+        except OSError:
+            log.exception("A playlist picture could not be read")
+        except TVUnavailable:
+            pass
+        return True
+
+    def _passed_over(self, image_id: str) -> bool:
+        refused = self._refused.get(image_id)
+        return refused is not None and self._clock() - refused[0] < PASS_OVER
+
+    def _passing_over(self, playlist: dict) -> str | None:
+        """Why a picture of the playlist is being left out, if one is."""
+        for p in playlist["pictures"]:
+            if not p["on_tv"] and self._passed_over(p["id"]):
+                return f"{p['name']} is left out for now. {self._refused[p['id']][1]}"
+        return None
 
     def _follow(self, playlist: dict, playing: dict, content_id: str | None, showing: bool,
                 may_be_gone: bool = False) -> None:
         """The TV has a picture the playlist did not put up. Carry on from it if it is one of the playlist's."""
         image_id = self.library.copy_of(content_id) if content_id else None
-        if image_id in [p["id"] for p in playlist["pictures"]]:
+        if image_id is not None and image_id == playing["image_id"]:
+            # Another copy of the picture that is up. Its time on screen carries on.
+            self.playlists.note(content_id=content_id)
+            if self._seen is None and showing and not playing["paused"]:
+                self._seen = self._clock()
+        elif image_id in [p["id"] for p in playlist["pictures"]]:
             cycle = playing["cycle"]
             if cycle and image_id in cycle and playing["image_id"] in cycle:
                 # It jumps the queue, so the rest of the shuffle still gets its turn.
@@ -207,6 +241,10 @@ class Player:
 
     def _step(self, playlist: dict, playing: dict, direction: int) -> None:
         ids = [p["id"] for p in playlist["pictures"]]
+        # Pictures the TV would not take lately are stepped over, unless there is nothing else.
+        ready = [p["id"] for p in playlist["pictures"]
+                 if p["on_tv"] or p["id"] == playing["image_id"] or not self._passed_over(p["id"])]
+        ids = ready or ids
         cycle = (playing["cycle"] or []) if playlist["shuffle"] else None
         image_id, cycle = neighbour(ids, playing["image_id"], direction, cycle, self._rng)
         if image_id is None:
@@ -227,20 +265,34 @@ class Player:
         if showing:
             self.library.shown(content_id)
         self._seen = self._clock() if showing else None
-        self._astray = None
+        self._astray = _NOTHING
 
     def _send(self, image_id: str) -> str:
         image = self.library.get(image_id)
-        content_id = self.tv.upload(self.library.path(image["file"]).read_bytes())
-        if not content_id:
-            raise TVUnavailable("The TV did not confirm the upload.")
+        try:
+            content_id = self.tv.upload(self.library.path(image["file"]).read_bytes())
+            if not content_id:
+                raise TVUnavailable("The TV did not confirm the upload.")
+        except TVUnavailable as e:
+            self._refused[image_id] = (self._clock(), str(e))
+            raise
+        except OSError:
+            self._refused[image_id] = (self._clock(), "It could not be read from the library.")
+            raise
+        self._refused.pop(image_id, None)
         self.library.record_sent(image_id, content_id)
         return content_id
 
     def _end(self, playlist: dict, why: str) -> None:
         self.playlists.stop()
-        self._seen = self._astray = self._problem = None
+        self._forget()
         self.ended = f"{playlist['name']} stopped because {why}."
+
+    def _forget(self) -> None:
+        """Clear what was noted while the last playlist ran."""
+        self._seen = self._problem = None
+        self._astray = _NOTHING
+        self._refused = {}
 
     def _running(self) -> tuple[dict, dict]:
         """The playlist that is playing, and where it has got to."""
@@ -255,7 +307,8 @@ class Player:
         """Run this playlist in place of any other. The clock sends its pictures, then starts it."""
         with self._lock:
             self.playlists.begin(playlist_id)
-            self._seen = self._astray = self._problem = self.ended = None
+            self._forget()
+            self.ended = None
         self._wake.set()
 
     def stop(self, remove: bool = False) -> dict:
@@ -264,7 +317,8 @@ class Player:
             playing = self.playlists.stop()
             if not playing:
                 raise Refused("No playlist is playing.")
-            self._seen = self._astray = self._problem = self.ended = None
+            self._forget()
+            self.ended = None
             removed = left = 0
             if remove:
                 pictures = self.playlists.get(playing["playlist_id"])["pictures"]
@@ -302,7 +356,7 @@ class Player:
             playing = self.playlists.playing()
             if not playing or playing["state"] != "playing" or playing["content_id"] == content_id:
                 return
-            self._astray = None
+            self._astray = _NOTHING
             self._follow(self.playlists.get(playing["playlist_id"]), playing, content_id, showing)
 
     def leaving(self, playlist_id: int, image_id: str) -> None:

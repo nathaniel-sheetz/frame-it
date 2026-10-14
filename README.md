@@ -96,7 +96,9 @@ is kept in the library's database and survives a restart.
 - **Changes while it plays.** A picture added to the playlist is sent to the TV
   straight away. So is one whose copy was removed from the TV: to keep a
   picture off the TV, take it out of the playlist. Taking out the picture that
-  is up moves on to the next.
+  is up moves on to the next. A picture the TV will not take, when its storage
+  is full for example, is left out for ten minutes and then tried again, and the
+  rest keep playing.
 - **Choosing a picture by hand.** If it is one of the playlist's, the playlist
   carries on from it. If it is anything else, the playlist stops. A choice made
   on this app's pages is acted on at once; one made with the remote or the

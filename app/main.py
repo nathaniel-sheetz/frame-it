@@ -35,7 +35,7 @@ config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
 if config.EDITOR_UPLOAD_DIR.is_dir():
     editor_routes._sweep(config.EDITOR_UPLOAD_DIR)
 
-app.include_router(editor_routes.create_router(tv, library, config.EDITOR_PROCESSED_DIR))
+app.include_router(editor_routes.create_router(tv, library, config.EDITOR_PROCESSED_DIR, player))
 app.include_router(library_routes.create_router(tv, library, player))
 app.include_router(playlist_routes.create_router(player, playlists, library))
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -124,6 +124,8 @@ def upload(file: UploadFile = File(...), crop: bool = Form(True), show: bool = F
     if not content_id:
         raise HTTPException(502, "The TV did not confirm the upload.")
     shown = tv.select(content_id) if show else False
+    if show:
+        player.chosen(content_id, shown)
     return {"id": content_id, "selected": show, "shown": shown}
 
 

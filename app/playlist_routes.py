@@ -92,6 +92,9 @@ def create_router(player, playlists, library) -> APIRouter:
 
     @router.post("/playlists")
     def create(req: NewPlaylist):
+        # Checked before the pictures, so a refused playlist leaves no fitted copies behind.
+        if not req.name.split():
+            raise HTTPException(400, "A playlist needs a name.")
         pictures = playable(req.pictures)
         try:
             playlist = playlists.create(req.name, req.interval, req.shuffle)

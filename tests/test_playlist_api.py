@@ -74,6 +74,12 @@ class TestPlaylists:
         assert [p['id'] for p in made['playlist']['pictures']] == held
         assert [p['name'] for p in client.get('/api/playlists').json()['items']] == ['Evening']
 
+    def test_a_playlist_without_a_name_keeps_no_fit_of_its_pictures(self, client, library):
+        source = original(client, 800, 600)
+        resp = client.post('/api/playlists', json={'name': '   ', 'pictures': [source]})
+        assert resp.status_code == 400
+        assert [image['id'] for image in library.list()] == [source]
+
     @pytest.mark.parametrize('body', [
         {'name': '   '}, {'name': 'x' * 101}, {'name': 'Evening', 'interval': 59},
         {'name': 'Evening', 'interval': 31 * 24 * 60 * 60}, {'name': 'Evening', 'interval': 90.5}])
@@ -256,6 +262,13 @@ class TestDisplayedFromTheLibrary:
         client.post(f'/api/library/{third}/display')
         playing = client.get('/api/playing').json()['playing']
         assert (playing['current']['id'], playing['next']['id']) == (third, first)
+
+    def test_sending_another_picture_to_display_stops_the_playlist(self, client, player):
+        first, second, other = results(client, 3)
+        begin(player, playlist(client, [first, second]))
+        client.post(f'/api/library/{other}/send', json={'show': True})
+        assert client.get('/api/playing').json() == {
+            'playing': None, 'ended': 'Evening stopped because another picture was chosen.'}
 
     def test_any_other_picture_stops_the_playlist(self, client, player):
         first, second, other = results(client, 3)
