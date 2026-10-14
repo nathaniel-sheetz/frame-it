@@ -11,7 +11,8 @@
     <header>
         <h1>Prepare a picture</h1>
         <span class="spacer"></span>
-        <a class="nav-link" href="/">Back to gallery</a>
+        <a class="nav-link" href="/">Gallery</a>
+        <a class="nav-link" href="/library">Library</a>
     </header>
 
     <div class="container">
@@ -120,13 +121,14 @@
                 <div class="result-preview">
                     <img id="result-image" src="" alt="Processed picture">
                 </div>
-                <p class="instruction">This is what the TV will show. Not right? Change the crop above and process again.</p>
+                <p class="instruction">This is what the TV will show. Not right? Change the crop above and process again. Sending keeps it in the library; Save to library keeps it without sending.</p>
                 <div class="send-row">
                     <button id="send-btn" class="btn btn-primary">Send to TV</button>
                     <label class="toggle-label">
                         <input type="checkbox" id="show-toggle">
                         <span class="toggle-text">Display now</span>
                     </label>
+                    <button id="save-btn" class="btn btn-secondary">Save to library</button>
                 </div>
                 <div id="send-status"></div>
                 <div class="filename-edit">

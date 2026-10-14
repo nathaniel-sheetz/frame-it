@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import shutil
 import time
@@ -10,7 +11,8 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import editor, editor_routes, fetch
-from app.editor_routes import _download_name, _stem, create_router
+from app.editor_routes import _download_name, _source_name, _stem, create_router
+from app.library import Library
 from app.tv import TVUnavailable
 
 
@@ -41,14 +43,20 @@ def tv():
 
 
 @pytest.fixture
-def dirs(tmp_path):
-    return tmp_path / 'uploads', tmp_path / 'processed'
+def library(tmp_path):
+    return Library(tmp_path / 'library')
 
 
 @pytest.fixture
-def client(tv, dirs):
+def dirs(library, tmp_path):
+    """Where sources are kept (the library) and where results are worked on."""
+    return library.files, tmp_path / 'processed'
+
+
+@pytest.fixture
+def client(tv, library, dirs):
     app = FastAPI()
-    app.include_router(create_router(tv, *dirs))
+    app.include_router(create_router(tv, library, dirs[1]))
     return TestClient(app)
 
 
@@ -144,6 +152,22 @@ class TestUpload:
         resp = upload(client, image_bytes(800, 600))
         assert resp.status_code == 413
         assert list(dirs[0].iterdir()) == []
+
+    def test_upload_shortens_a_very_long_name(self, client):
+        name = upload(client, image_bytes(800, 600), 'x' * 230 + '.jpg').json()['original_filename']
+        assert name == 'x' * 196 + '.jpg'
+
+    def test_upload_names_a_picture_that_came_without_one(self, client):
+        assert upload(client, image_bytes(800, 600), '   ').json()['original_filename'] == 'image.jpg'
+
+    def test_upload_that_could_not_be_written_says_so(self, client, library, monkeypatch):
+        def full(*args, **kwargs):
+            raise OSError(28, 'No space left on device')
+
+        monkeypatch.setattr(library, 'add_original', full)
+        resp = upload(client, image_bytes(800, 600))
+        assert resp.status_code == 500
+        assert resp.json()['detail'] == 'The picture could not be saved to the library.'
 
     @pytest.mark.parametrize('name', ['photo.jpg', '..%5C..%5Cconfig.toml', '0' * 32 + '.gif'])
     def test_source_rejects_names_it_did_not_issue(self, client, name):
@@ -402,6 +426,20 @@ class TestSendToTV:
         assert resp.status_code == 502
         assert tv.selected == []
 
+    def test_send_under_the_name_suggested_for_a_long_one(self, client, tv):
+        src = upload(client, image_bytes(800, 600), 'x' * 230 + '.jpg').json()
+        data = process(client, src['filename'], original_filename=src['original_filename']).json()
+        assert len(data['suggested_filename']) <= 200
+        resp = client.post(data['url'] + '/send', json={'name': data['suggested_filename']})
+        assert resp.status_code == 200
+        assert len(tv.uploaded) == 1
+
+    def test_send_a_pair_under_the_name_suggested_for_two_long_ones(self, client, tv):
+        body = TestDiptych().body(client, original_filename1='l' * 96 + '.jpg', original_filename2='r' * 96 + '.jpg')
+        data = client.post('/api/editor/process-diptych', json=body).json()
+        assert len(data['suggested_filename']) <= 200
+        assert client.post(data['url'] + '/send', json={'name': data['suggested_filename']}).status_code == 200
+
 
 class TestSendSource:
     """The quick path: a stored source goes to the TV with the automatic fit."""
@@ -485,15 +523,134 @@ class TestSendSource:
         assert tv.selected == []
 
 
+class TestKeeping:
+    """Sources join the library as they arrive; results join it when sent or saved."""
+
+    def test_a_source_is_kept_with_where_it_came_from(self, client, library):
+        src = upload(client, image_bytes(800, 600), 'My Photo.jpg').json()
+        [image] = library.list()
+        assert (image['file'], image['kind'], image['name']) == (src['filename'], 'original', 'My Photo.jpg')
+
+    def test_the_same_picture_twice_is_one_source(self, client, library):
+        first = upload(client, image_bytes(800, 600), 'first.jpg').json()
+        again = upload(client, image_bytes(800, 600), 'second.jpg').json()
+        assert again['filename'] == first['filename']
+        assert again['original_filename'] == 'first.jpg'
+        assert len(library.list()) == 1
+
+    def test_a_processed_result_is_not_kept_until_asked(self, client, library):
+        processed(client)
+        assert [image['kind'] for image in library.list()] == ['original']
+
+    def test_a_sent_result_is_kept_with_its_crop_and_its_tv_copy(self, client, library):
+        src = upload(client, image_bytes(800, 600), 'Falls.jpg').json()
+        data = process(client, src['filename'], original_filename='Falls.jpg', letterbox=True).json()
+        client.post(data['url'] + '/send', json={})
+
+        result = library.get(data['filename'][:32])
+        assert (result['kind'], result['name'], result['status']) == ('result', 'Falls_4k.jpg', 'on-tv')
+        assert result['tv'] == ['MY_F0001']
+        assert result['recipe'] == {'type': 'single', 'preset': '4k', 'letterbox': True}
+        [parent] = result['parents']
+        assert parent['file'] == src['filename']
+        assert parent['crop'] == {'x': 0, 'y': 0, 'width': 800, 'height': 450}
+
+    def test_a_result_that_did_not_reach_the_tv_is_not_kept(self, client, tv, library):
+        tv.unavailable = True
+        client.post(processed(client)['url'] + '/send', json={})
+        assert [image['kind'] for image in library.list()] == ['original']
+
+    def test_a_sent_pair_is_kept_with_both_originals(self, client, library):
+        body = TestDiptych().body(client, gap_percent=3)
+        data = client.post('/api/editor/process-diptych', json=body).json()
+        client.post(data['url'] + '/send', json={})
+
+        result = library.get(data['filename'][:32])
+        assert result['recipe'] == {'type': 'pair', 'preset': '4k', 'gap_percent': 3.0}
+        assert [parent['name'] for parent in result['parents']] == ['left.jpg', 'right.jpg']
+        assert result['parents'][1]['crop'] == body['crop2']
+
+    def test_a_result_shown_on_sending_is_marked_as_shown(self, client, library):
+        data = processed(client)
+        client.post(data['url'] + '/send', json={'show': True})
+        assert library.get(data['filename'][:32])['last_shown_at']
+
+    def test_save_keeps_a_result_without_sending_it(self, client, tv, library):
+        data = processed(client)
+        resp = client.post(data['url'] + '/save', json={'name': 'Living room'})
+        assert resp.status_code == 200
+        assert resp.json() == {'success': True, 'id': data['filename'][:32], 'name': 'Living room.jpg'}
+        saved = library.get(data['filename'][:32])
+        assert (saved['status'], saved['tv']) == ('ready', [])
+        assert tv.uploaded == []
+
+    def test_saving_then_sending_is_still_one_picture(self, client, library):
+        data = processed(client)
+        client.post(data['url'] + '/save')
+        client.post(data['url'] + '/send', json={})
+        results = [image for image in library.list() if image['kind'] == 'result']
+        assert [image['status'] for image in results] == ['on-tv']
+
+    def test_save_unknown_result(self, client):
+        assert client.post('/api/editor/result/' + '0' * 32 + '.jpg/save').status_code == 404
+
+    def test_a_sent_result_is_kept_under_the_name_it_was_given(self, client, library):
+        data = processed(client)
+        client.post(data['url'] + '/send', json={'name': 'Living room'})
+        assert library.get(data['filename'][:32])['name'] == 'Living room.jpg'
+
+    @pytest.mark.parametrize('settings', [None, 'not json'])
+    def test_a_result_whose_settings_are_lost_is_still_kept(self, client, library, dirs, settings):
+        data = processed(client)
+        beside = (dirs[1] / data['filename']).with_suffix('.json')
+        if settings is None:
+            beside.unlink()
+        else:
+            beside.write_text(settings)
+
+        resp = client.post(data['url'] + '/save')
+        assert resp.json()['name'] == f"frame_tv_{data['filename']}"
+        saved = library.get(data['filename'][:32])
+        assert (saved['recipe'], saved['parents']) == (None, [])
+
+    def test_a_quick_send_keeps_what_was_sent(self, client, tv, library):
+        src = upload(client, image_bytes(800, 600), 'Falls.jpg').json()
+        client.post(src['url'] + '/send', json={'crop': False})
+
+        [result] = [image for image in library.list() if image['kind'] == 'result']
+        result = library.get(result['id'])
+        assert (result['name'], result['status']) == ('Falls_fit.jpg', 'on-tv')
+        assert result['recipe'] == {'type': 'auto', 'crop': False}
+        assert result['parents'][0]['file'] == src['filename']
+        assert library.path(result['file']).read_bytes() == tv.uploaded[0]
+
+    def test_a_send_the_library_could_not_record_is_a_warning(self, client, tv, library, monkeypatch):
+        # The picture is on the TV by then; an error would invite a second, duplicate send.
+        def full(*args, **kwargs):
+            raise OSError(28, 'No space left on device')
+
+        monkeypatch.setattr(library, 'keep_result', full)
+        resp = client.post(processed(client)['url'] + '/send', json={})
+        assert resp.status_code == 200
+        assert 'could not be saved to the library' in resp.json()['warning']
+        assert len(tv.uploaded) == 1
+
+
 class TestCleanup:
-    def test_old_working_files_are_swept_on_upload(self, client, dirs):
-        stale = dirs[0] / ('a' * 32 + '.jpg')
-        stale.write_bytes(image_bytes(10, 10))
-        two_days_ago = time.time() - 2 * 24 * 60 * 60
-        os.utime(stale, (two_days_ago, two_days_ago))
-        fresh = upload(client, image_bytes(800, 600)).json()
-        assert not stale.exists()
-        assert (dirs[0] / fresh['filename']).is_file()
+    def test_sources_are_never_swept(self, client, dirs):
+        old = dirs[0] / upload(client, image_bytes(800, 600)).json()['filename']
+        make_stale(old)
+        upload(client, image_bytes(640, 480))
+        assert old.is_file()
+
+    def test_the_settings_beside_a_result_are_swept_with_it(self, client, dirs):
+        stale = dirs[1] / processed(client)['filename']
+        settings = stale.with_suffix('.json')
+        assert json.loads(settings.read_text())['recipe']['type'] == 'single'
+        make_stale(stale)
+        make_stale(settings)
+        upload(client, image_bytes(640, 480))
+        assert not stale.exists() and not settings.exists()
 
     def test_old_results_are_swept_and_fresh_ones_kept(self, client, dirs):
         fresh = dirs[1] / processed(client)['filename']
@@ -506,7 +663,7 @@ class TestCleanup:
 
     def test_upload_survives_a_file_that_cannot_be_deleted(self, client, dirs, monkeypatch):
         # On Windows a working file that is still open cannot be removed.
-        stale = dirs[0] / ('c' * 32 + '.jpg')
+        stale = dirs[1] / ('c' * 32 + '.jpg')
         stale.write_bytes(image_bytes(10, 10))
         make_stale(stale)
 
@@ -516,12 +673,10 @@ class TestCleanup:
         monkeypatch.setattr(Path, 'unlink', locked)
         assert upload(client, image_bytes(800, 600)).status_code == 200
 
-    def test_upload_recreates_deleted_working_folders(self, client, dirs):
-        for folder in dirs:
-            shutil.rmtree(folder)
+    def test_upload_recreates_a_deleted_working_folder(self, client, dirs):
+        shutil.rmtree(dirs[1])
         resp = upload(client, image_bytes(800, 600))
         assert resp.status_code == 200
-        assert (dirs[0] / resp.json()['filename']).is_file()
         assert dirs[1].is_dir()
 
 
@@ -531,6 +686,7 @@ class TestNames:
         ('C:\\scans\\plate.tar.gz', 'plate_tar'),
         ('../../etc/passwd', 'passwd'),
         ('', 'image'),
+        ('y' * 100 + '.jpg', 'y' * 80),
     ])
     def test_stem(self, original, expected):
         assert _stem(original) == expected
@@ -541,6 +697,19 @@ class TestNames:
         ('a/b', 'a_b.jpg'),
         ('....', 'fallback.jpg'),
         (None, 'fallback.jpg'),
+        ('z' * 200, 'z' * 196 + '.jpg'),
     ])
     def test_download_name(self, name, expected):
         assert _download_name(name, 'fallback') == expected
+
+    @pytest.mark.parametrize('filename, expected', [
+        ('My Photo.jpg', 'My Photo.jpg'),
+        ('  My \n Photo.jpg ', 'My Photo.jpg'),
+        ('   ', 'image.jpg'),
+        ('x' * 230 + '.png', 'x' * 196 + '.png'),
+        ('x' * 230, 'x' * 200),
+        # Too long to be an extension, so it is not kept as one.
+        ('x' * 230 + '.notanextension', 'x' * 200),
+    ])
+    def test_source_name(self, filename, expected):
+        assert _source_name(filename) == expected

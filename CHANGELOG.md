@@ -5,6 +5,64 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.3.0.0] - 2026-10-13
+
+### Added
+
+- A picture library at `/library`. Every picture brought in is kept, and so is
+  every result sent to the TV or saved from the editor, with the originals and
+  crop settings it was made from. Nothing in it is deleted automatically.
+- The library page shows one grid with filters for On TV, Ready and Building
+  blocks, and a box that finds pictures by name, creator or subject. Send a
+  picture again, take it off the TV without losing it, or open an original in
+  the editor.
+- A box at the top of the library page takes any number of picture files or
+  links and keeps them without sending them anywhere.
+- Tapping a picture opens it in a popup, where it can be renamed and given
+  creators and subjects. A result also shows the creators and subjects of the
+  originals it was made from. The popup loads a preview of up to 1600 px
+  instead of the whole file.
+- Originals are tagged as building blocks when an automatic 16:9 fit would cut
+  off more than 10%, or leave them under 1920 wide. The tag can be changed by
+  hand.
+- "Save to library" in the editor keeps a result without sending it.
+- Library API under `/api/library`: list, one picture, `PATCH` for `name`,
+  `creators` and `subjects`, `thumb`, `view`, `file`, `send`, `display`,
+  `remove-from-tv`, the building block tag, and `DELETE`.
+  `POST /api/editor/result/{name}/save` keeps a result.
+- `[library] path` in `config.toml` sets where the library lives. The default
+  is `data/library`.
+- Tests for the library (`tests/test_library.py`, `tests/test_library_api.py`),
+  the gallery routes (`tests/test_main_api.py`) and the config
+  (`tests/test_config.py`).
+
+### Changed
+
+- Sources are library pictures now: `upload` and `fetch` add to the library,
+  and the same file a second time is the same entry. They are no longer removed
+  after 24 hours. Processed results that are neither sent nor saved still are.
+- The gallery names the pictures the library holds and marks the rest "Not in
+  library". Removing a picture from the TV keeps it in the library, and a
+  removal made with the remote is noticed the next time the gallery loads.
+- Sending from the editor takes a `name`, and what is sent is kept in the
+  library under it.
+- A picture's name is kept on one line and at 200 characters at most. Names
+  suggested for results stay within that, so a very long file name no longer
+  stops a picture from being sent or its details from being saved.
+
+### Fixed
+
+- The gallery no longer fails as if the TV were unreachable when the TV drops
+  the connection that carries thumbnails. The transfer is asked for again, and
+  the list comes back without the thumbnails the TV will not send.
+- Sending a library picture whose file has gone from the disk says so instead
+  of failing with an unexplained error.
+- A picture or preview that could not be written in full (a full disk, say) is
+  no longer left behind half-written and served as if it were whole.
+- Renaming a picture whose name has no extension, such as "Screenshot
+  10.30.45", no longer keeps the last part of the old name.
+- The library loads on Python 3.13 and earlier.
+
 ## [0.2.0.0] - 2026-10-13
 
 ### Added

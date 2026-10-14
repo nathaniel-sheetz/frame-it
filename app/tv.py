@@ -4,6 +4,7 @@ Everything here is limited to the art channel: no power or remote-key commands
 are ever sent, and only the "My Photos" category is managed. The one exception
 is pairing, which opens the remote-control channel once to be given a token.
 """
+import logging
 import re
 import threading
 from contextlib import contextmanager
@@ -21,6 +22,9 @@ MY_PHOTOS = "MY-C0002"
 _PHOTO_ID = re.compile(r"MY_F\d+")
 # Longer than a normal request: someone has to pick up the remote.
 PAIR_TIMEOUT = 60
+THUMBNAIL_TRIES = 4
+
+log = logging.getLogger(__name__)
 
 
 class TVUnavailable(Exception):
@@ -35,6 +39,26 @@ def check_photo_id(content_id: str) -> str:
     if not _PHOTO_ID.fullmatch(content_id):
         raise NotAPhoto(content_id)
     return content_id
+
+
+def _thumbnails(art, content_ids: list[str]) -> dict[str, bytes]:
+    """Thumbnails by content id.
+
+    The TV sends them over a second connection, and now and then drops it as it
+    opens. The art channel itself is unharmed, so they are simply asked for again.
+    """
+    for tries_left in reversed(range(THUMBNAIL_TRIES)):
+        try:
+            thumbs = art.get_thumbnail_list(content_ids)
+        except OSError:
+            if not tries_left:
+                raise
+        except (ValueError, KeyError) as e:
+            # A connection closed without an error leaves a reply that cannot be read. It is the same drop.
+            if not tries_left:
+                raise ConnectionError("The TV cut the thumbnail transfer short") from e
+        else:
+            return {Path(name).stem: bytes(data) for name, data in thumbs.items()}
 
 
 class FrameTV:
@@ -100,19 +124,24 @@ class FrameTV:
         with self._art() as art:
             photos = art.available(MY_PHOTOS)
             missing = [p["content_id"] for p in photos if p["content_id"] not in cached_thumbs]
-            thumbs = art.get_thumbnail_list(missing) if missing else {}
+            try:
+                thumbs = _thumbnails(art, missing) if missing else {}
+            except OSError:
+                # The list is still worth having. Each missing thumbnail is asked for again on its own.
+                log.warning("The TV did not send thumbnails for %s", ", ".join(missing))
+                thumbs = {}
             return {
                 "art_mode": art.get_artmode() == "on",
                 "current": art.get_current().get("content_id"),
                 "photos": photos,
-                "thumbs": {Path(name).stem: bytes(data) for name, data in thumbs.items()},
+                "thumbs": thumbs,
             }
 
     def thumbnail(self, content_id: str) -> bytes | None:
         check_photo_id(content_id)
         with self._art() as art:
-            thumbs = art.get_thumbnail_list([content_id])
-        return bytes(next(iter(thumbs.values()))) if thumbs else None
+            thumbs = _thumbnails(art, [content_id])
+        return next(iter(thumbs.values()), None)
 
     def upload(self, jpeg: bytes) -> str:
         with self._art() as art:
