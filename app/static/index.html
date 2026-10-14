@@ -34,6 +34,7 @@
   <span id="count" class="pill" hidden></span>
   <span class="spacer"></span>
   <a class="nav-link" href="/library">Library</a>
+  <a class="nav-link" href="/playlists">Playlists</a>
   <a class="nav-link" href="/editor">Editor</a>
   <button id="refresh">Refresh</button>
 </header>
@@ -71,6 +72,7 @@
   <div id="msg"></div>
   <div id="grid"></div>
 </main>
+<script src="/static/playing.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const grid = $('grid'), msg = $('msg'), state = $('state'), count = $('count');
@@ -180,6 +182,8 @@ async function run(label, fn) {
     say(e.message, true);
   }
   setBusy(false);
+  // Setting or removing a picture can move a playlist on, or stop it.
+  window.playingChanged();
   await load();
 }
 
@@ -292,6 +296,14 @@ const drop = $('drop');
 ['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
 drop.addEventListener('drop', e => dropped(e.dataTransfer));
+
+// When a playlist changes the picture, the gallery marks the new one as current.
+let playingNow;
+document.addEventListener('playing', e => {
+  const id = e.detail.playing && e.detail.playing.current ? e.detail.playing.current.id : null;
+  if (playingNow !== undefined && id !== playingNow && !busy) load();
+  playingNow = id;
+});
 
 load();
 </script>

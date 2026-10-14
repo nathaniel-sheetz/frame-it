@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playlists · Frame TV Art</title>
+<link rel="stylesheet" href="/static/site.css">
+<style>
+  /* 16px, so a phone does not zoom the page in when a box is tapped. */
+  input[type=text], input[type=number], select {
+    font: inherit; font-size: 16px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--muted); }
+
+  #new { display: flex; gap: 8px; margin-bottom: 16px; }
+  #new input { flex: 1; min-width: 0; max-width: 420px; }
+
+  .playlist {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px; margin-bottom: 16px; display: grid; gap: 12px;
+  }
+  .playlist.active { border-color: var(--accent); }
+  .head, .settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .head .title { flex: 1 1 220px; min-width: 0; font-weight: 600; }
+  .settings label { display: flex; align-items: center; gap: 6px; }
+  .custom { display: flex; align-items: center; gap: 6px; }
+  .custom[hidden] { display: none; }
+  .custom input { width: 90px; }
+
+  .pictures { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .tile {
+    position: relative; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; overflow: hidden; cursor: grab;
+  }
+  .tile.current { border-color: var(--accent); }
+  .tile.dragged { opacity: .4; }
+  .tile.target { border-color: var(--text); }
+  .tile .thumb img { object-fit: cover; }
+  .place {
+    position: absolute; top: 6px; left: 6px; min-width: 22px; text-align: center; font-size: 11px; font-weight: 700;
+    padding: 2px 6px; border-radius: 4px; background: var(--panel); color: var(--muted); border: 1px solid var(--line);
+  }
+  .tile.current .place { background: var(--accent); border-color: var(--accent); color: #1a1405; }
+  .tile-name { padding: 6px 8px 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .tile-note { padding: 0 8px; font-size: 11px; color: var(--muted); }
+  .tile-actions { display: flex; gap: 6px; padding: 6px 8px 8px; }
+  .tile-actions button { flex: 1; padding: 2px 0; }
+  .add {
+    display: grid; place-items: center; min-height: 120px; text-align: center; padding: 12px;
+    border: 2px dashed var(--line); border-radius: 8px; color: var(--muted); text-decoration: none;
+  }
+  .add:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Playlists</h1>
+  <span class="spacer"></span>
+  <a class="nav-link" href="/">Gallery</a>
+  <a class="nav-link" href="/library">Library</a>
+  <a class="nav-link" href="/editor">Editor</a>
+</header>
+<main>
+  <form id="new">
+    <input type="text" id="new-name" maxlength="100" placeholder="Name a new playlist" aria-label="Name of the new playlist" required autocomplete="off">
+    <button class="primary">Create</button>
+  </form>
+  <div id="msg"></div>
+  <div id="lists"></div>
+</main>
+<script src="/static/playing.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const lists = $('lists'), msg = $('msg');
+
+const MINUTE = 60, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
+const PRESETS = [5 * MINUTE, 10 * MINUTE, 15 * MINUTE, 30 * MINUTE, HOUR, 2 * HOUR, 4 * HOUR, 8 * HOUR, DAY];
+const UNITS = [['minutes', MINUTE], ['hours', HOUR], ['days', DAY]];
+// The server's limits on how long one picture stays up.
+const SHORTEST = MINUTE, LONGEST = 30 * DAY;
+
+let busy = false;
+let data = { items: [], playing: null };
+// The playlist whose box for a custom time is open, and whether the page is behind the server.
+let customising = null, stale = false;
+// Remembered for each playlist until the page is left.
+const takeOff = new Set();
+
+function say(text, isError = false) {
+  msg.textContent = text;
+  msg.className = isError ? 'err' : '';
+}
+
+async function api(path, method = 'GET', body) {
+  const res = await fetch(path, body === undefined ? { method }
+    : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = Array.isArray(answer.detail) ? answer.detail[0]?.msg : answer.detail;
+    throw new Error(typeof detail === 'string' ? detail : `Request failed (${res.status})`);
+  }
+  return answer;
+}
+
+function setBusy(value) {
+  busy = value;
+  document.querySelectorAll('main button, main input, main select').forEach(b => b.disabled = value);
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// A length of time in words: "45 minutes", "1 day 4 hours".
+function span(seconds) {
+  const parts = [];
+  for (const [unit, size] of [['day', DAY], ['hour', HOUR], ['minute', MINUTE]]) {
+    const n = Math.floor(seconds / size);
+    if (n) parts.push(plural(n, unit));
+    seconds -= n * size;
+  }
+  if (seconds || !parts.length) parts.push(plural(Math.round(seconds), 'second'));
+  return parts.join(' ');
+}
+
+function el(tag, text = '', className = '') {
+  const node = document.createElement(tag);
+  node.textContent = text;
+  node.className = className;
+  return node;
+}
+
+function button(text, onclick, className = '') {
+  const b = el('button', text, className);
+  b.disabled = busy;
+  b.onclick = onclick;
+  return b;
+}
+
+async function load() {
+  data = await api('/api/playlists');
+  render();
+}
+
+async function run(label, fn) {
+  if (busy) return;
+  setBusy(true);
+  say(label);
+  try {
+    say(await fn() || '');
+  } catch (e) {
+    say(e.message, true);
+  }
+  busy = false;
+  await load().catch(e => say(e.message, true));
+  setBusy(false);
+  window.playingChanged();
+}
+
+function render() {
+  stale = false;
+  lists.replaceChildren();
+  if (!data.items.length) {
+    lists.append(el('div', 'No playlists yet. Name one above, then add pictures to it from the library.', 'empty'));
+    return;
+  }
+  for (const playlist of data.items) lists.append(section(playlist));
+}
+
+function section(playlist) {
+  const playing = data.playing && data.playing.playlist.id === playlist.id ? data.playing : null;
+  const box = el('section', '', 'playlist' + (playing ? ' active' : ''));
+
+  const head = el('div', '', 'head');
+  const title = el('input', '', 'title');
+  title.type = 'text';
+  title.maxLength = 100;
+  title.value = playlist.name;
+  title.disabled = busy;
+  title.setAttribute('aria-label', 'Playlist name');
+  title.onchange = () => {
+    if (title.value.trim()) change(playlist, { name: title.value });
+    else title.value = playlist.name;
+  };
+  head.append(title);
+  if (playing) {
+    const sending = playing.state === 'sending';
+    head.append(el('span', sending ? `Sending ${playing.on_tv} of ${playing.total}` : playing.paused ? 'Paused' : 'Playing', 'pill on'));
+    head.append(button('Stop', () => stop(playlist), 'danger'));
+  } else {
+    const play = button('Play', () => start(playlist), 'primary');
+    play.disabled = busy || !playlist.pictures.length;
+    head.append(play);
+  }
+  head.append(button('Delete', () => remove(playlist), 'danger'));
+
+  box.append(head, settings(playlist));
+  if (playing) {
+    const label = el('label', '', 'hint');
+    const tick = el('input');
+    tick.type = 'checkbox';
+    tick.checked = takeOff.has(playlist.id);
+    tick.onchange = () => { tick.checked ? takeOff.add(playlist.id) : takeOff.delete(playlist.id); };
+    label.append(tick, ' When it is stopped, also take its pictures off the TV');
+    box.append(label);
+  }
+  box.append(pictures(playlist, playing));
+  return box;
+}
+
+function settings(playlist) {
+  const row = el('div', '', 'settings');
+
+  const every = el('select');
+  every.disabled = busy;
+  for (const seconds of PRESETS) every.append(new Option(span(seconds), seconds));
+  // A time set by hand is offered by name, so the list always shows what the playlist has.
+  if (!PRESETS.includes(playlist.interval)) every.append(new Option(span(playlist.interval), playlist.interval));
+  every.append(new Option('Custom…', 'custom'));
+  every.value = customising === playlist.id ? 'custom' : playlist.interval;
+
+  const custom = el('span', '', 'custom');
+  custom.hidden = customising !== playlist.id;
+  const amount = el('input');
+  amount.type = 'number';
+  amount.min = 1;
+  amount.step = 1;
+  amount.disabled = busy;
+  amount.setAttribute('aria-label', 'How long');
+  const unit = el('select');
+  unit.disabled = busy;
+  unit.setAttribute('aria-label', 'Unit');
+  for (const [name, size] of UNITS) unit.append(new Option(name, size));
+  // Start from what the playlist has, in the largest unit that fits it exactly.
+  const fits = UNITS.filter(([, size]) => playlist.interval % size === 0).pop() || UNITS[0];
+  unit.value = fits[1];
+  amount.value = Math.round(playlist.interval / fits[1]);
+  custom.append(amount, unit, button('Set', () => {
+    const seconds = Math.round(Number(amount.value) * Number(unit.value));
+    if (!(seconds >= SHORTEST && seconds <= LONGEST)) {
+      say(`Each picture can stay up for anything from ${span(SHORTEST)} to ${span(LONGEST)}.`, true);
+      return;
+    }
+    customising = null;
+    change(playlist, { interval: seconds });
+  }));
+
+  every.onchange = () => {
+    if (every.value === 'custom') {
+      customising = playlist.id;
+      custom.hidden = false;
+      amount.focus();
+    } else {
+      customising = null;
+      change(playlist, { interval: Number(every.value) });
+    }
+  };
+  const each = el('label', 'Each picture for ');
+  each.append(every);
+
+  const shuffle = el('input');
+  shuffle.type = 'checkbox';
+  shuffle.checked = playlist.shuffle;
+  shuffle.disabled = busy;
+  shuffle.onchange = () => change(playlist, { shuffle: shuffle.checked });
+  const mixed = el('label');
+  mixed.append(shuffle, 'Shuffle');
+
+  const n = playlist.pictures.length;
+  const cycle = el('span', n > 1
+    ? `${plural(n, 'picture')} × ${span(playlist.interval)} = ${span(n * playlist.interval)} on screen for a full cycle`
+    : n ? 'One picture, so it stays up.' : 'No pictures yet.', 'hint');
+
+  row.append(each, custom, mixed, cycle);
+  return row;
+}
+
+function pictures(playlist, playing) {
+  const grid = el('div', '', 'pictures');
+  const order = playlist.pictures.map(p => p.id);
+
+  playlist.pictures.forEach((picture, i) => {
+    const tile = el('div', '', 'tile');
+    const isCurrent = playing && playing.current && playing.current.id === picture.id;
+    if (isCurrent) tile.classList.add('current');
+
+    const thumb = el('div', '', 'thumb');
+    const img = el('img');
+    img.loading = 'lazy';
+    img.alt = picture.name;
+    img.draggable = false;
+    img.src = `/api/library/${picture.id}/thumb`;
+    thumb.append(img, el('span', isCurrent ? `${i + 1} · Up now` : i + 1, 'place'));
+
+    const actions = el('div', '', 'tile-actions');
+    const earlier = button('◀', () => reorder(playlist, move(order, i, i - 1)));
+    earlier.title = 'Earlier';
+    earlier.setAttribute('aria-label', `Move ${picture.name} earlier`);
+    earlier.disabled = busy || i === 0;
+    const later = button('▶', () => reorder(playlist, move(order, i, i + 1)));
+    later.title = 'Later';
+    later.setAttribute('aria-label', `Move ${picture.name} later`);
+    later.disabled = busy || i === order.length - 1;
+    const out = button('×', () => takeOut(playlist, picture), 'danger');
+    out.title = 'Take out of the playlist';
+    out.setAttribute('aria-label', `Take ${picture.name} out of the playlist`);
+    actions.append(earlier, later, out);
+
+    tile.append(thumb, el('div', picture.name, 'tile-name'));
+    // Only worth saying while it runs: before that, most pictures are not on the TV.
+    if (playing && !picture.on_tv) tile.append(el('div', 'Not on the TV yet', 'tile-note'));
+    tile.append(actions);
+
+    tile.draggable = !busy;
+    tile.ondragstart = e => {
+      dragging = { playlist: playlist.id, from: i };
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', picture.name);
+      tile.classList.add('dragged');
+    };
+    tile.ondragend = () => { dragging = null; tile.classList.remove('dragged'); };
+    tile.ondragover = e => {
+      if (!dragging || dragging.playlist !== playlist.id || dragging.from === i) return;
+      e.preventDefault();
+      tile.classList.add('target');
+    };
+    tile.ondragleave = () => tile.classList.remove('target');
+    tile.ondrop = e => {
+      e.preventDefault();
+      tile.classList.remove('target');
+      if (dragging && dragging.playlist === playlist.id) reorder(playlist, move(order, dragging.from, i));
+    };
+    grid.append(tile);
+  });
+
+  const add = el('a', 'Add pictures from the library', 'add');
+  add.href = `/library?playlist=${playlist.id}`;
+  grid.append(add);
+  return grid;
+}
+
+// The tile being dragged, and the playlist it belongs to.
+let dragging = null;
+
+function move(order, from, to) {
+  const moved = [...order];
+  moved.splice(to, 0, ...moved.splice(from, 1));
+  return moved;
+}
+
+function change(playlist, changes) {
+  run('', async () => { await api(`/api/playlists/${playlist.id}`, 'PATCH', changes); });
+}
+
+function reorder(playlist, order) {
+  run('', async () => { await api(`/api/playlists/${playlist.id}`, 'PATCH', { order }); });
+}
+
+function takeOut(playlist, picture) {
+  run('', async () => {
+    await api(`/api/playlists/${playlist.id}/pictures/${picture.id}`, 'DELETE');
+    return `${picture.name} is out of ${playlist.name}. It is still in the library.`;
+  });
+}
+
+function start(playlist) {
+  const other = data.playing && data.playing.playlist;
+  if (other && !confirm(`Play ${playlist.name} in place of ${other.name}?`)) return;
+  run('Starting…', async () => {
+    await api(`/api/playlists/${playlist.id}/play`, 'POST');
+    const missing = playlist.pictures.filter(p => !p.on_tv).length;
+    return missing
+      ? `Starting ${playlist.name}. ${plural(missing, 'picture')} ${missing === 1 ? 'goes' : 'go'} to the TV first.`
+      : `Starting ${playlist.name}.`;
+  });
+}
+
+function stop(playlist) {
+  const remove = takeOff.has(playlist.id);
+  run(remove ? 'Stopping, and taking its pictures off the TV…' : 'Stopping…', async () => {
+    const r = await api('/api/playing/stop', 'POST', { remove });
+    takeOff.delete(playlist.id);
+    if (r.left) throw new Error(`${playlist.name} is stopped, but ${plural(r.left, 'picture')} could not be taken off the TV.`);
+    return remove ? `${playlist.name} is stopped. ${plural(r.removed, 'picture')} taken off the TV.`
+      : `${playlist.name} is stopped. Its pictures are still on the TV.`;
+  });
+}
+
+function remove(playlist) {
+  if (!confirm(`Delete the playlist ${playlist.name}? Its pictures stay in the library and on the TV.`)) return;
+  run('Deleting…', async () => {
+    await api(`/api/playlists/${playlist.id}`, 'DELETE');
+    return 'Deleted.';
+  });
+}
+
+$('new').onsubmit = e => {
+  e.preventDefault();
+  const name = $('new-name').value;
+  run('', async () => {
+    await api('/api/playlists', 'POST', { name });
+    $('new-name').value = '';
+    return `${name.trim()} is ready for pictures.`;
+  });
+};
+
+// Someone typing a name or a time is not interrupted: the page catches up when they are done.
+const typing = () => lists.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName)
+  && document.activeElement.type !== 'checkbox';
+
+function catchUp() {
+  if (busy) return;
+  if (typing() || dragging) { stale = true; return; }
+  load().catch(() => {});
+}
+
+document.addEventListener('playing', catchUp);
+lists.addEventListener('focusout', () => setTimeout(() => { if (stale) catchUp(); }));
+
+load().catch(e => say(e.message, true));
+</script>
+</body>
+</html>

@@ -14,6 +14,8 @@ any browser on the same network.
   you sent to the TV or saved. Send a picture again, take it off the TV without
   losing it, or open an original in the editor. Drop pictures or links here to
   keep them without sending them anywhere.
+- **Playlists** (`/playlists`): put library pictures in an order and have the
+  TV change from one to the next on a timer.
 
 ## Library
 
@@ -66,6 +68,45 @@ crop work matters to you.
 Links are downloaded by the server, so it only follows `http` and `https`
 addresses on the public internet (not this computer or the home network), and
 gives up on anything over 50 MB or slower than 30 seconds.
+
+## Playlists
+
+A playlist is a set of library pictures, an order, and how long each one stays
+up. The app keeps the clock, not the TV's own slideshow, so a playlist only
+runs while the app is running and can reach the TV. Where a playlist has got to
+is kept in the library's database and survives a restart.
+
+- **Making one.** Name it on the playlists page, then **Add pictures from the
+  library**: that opens the library with **Select for a playlist** switched on,
+  where a tap selects a picture. The editor's review step can also put a result
+  in a playlist as it is sent or saved.
+- **What can go in.** A result goes in as it is. An original goes in as its
+  automatic 16:9 fit, which is kept in the library like any other result. A
+  building block is refused until it has been edited.
+- **Playing.** Pressing **Play** sends the pictures the TV does not have yet,
+  one at a time, and starts once they are all there. One playlist plays at a
+  time; playing another takes over.
+- **How long.** One time for the whole playlist: 5, 10, 15 or 30 minutes, 1, 2,
+  4, 8 or 24 hours, or a custom time from 1 minute to 30 days. Only time on
+  screen in Art Mode counts. While the TV is being watched, is off, or cannot
+  be reached, the clock stands still and the picture keeps the time it has left.
+- **Order.** Drag the pictures or use the arrows, also while it plays: the
+  picture that is up stays, and the new order applies from the next change.
+  **Shuffle** plays every picture once in a random order, then shuffles again.
+- **Changes while it plays.** A picture added to the playlist is sent to the TV
+  straight away. So is one whose copy was removed from the TV: to keep a
+  picture off the TV, take it out of the playlist. Taking out the picture that
+  is up moves on to the next.
+- **Choosing a picture by hand.** If it is one of the playlist's, the playlist
+  carries on from it. If it is anything else, the playlist stops. A choice made
+  on this app's pages is acted on at once; one made with the remote or the
+  phone app is noticed within about half a minute.
+- **Stopping.** The pictures stay on the TV unless the box to take them off is
+  ticked first. They stay in the library either way.
+
+The strip under the header of the gallery, library and playlists pages shows
+the playlist that is running: the picture that is up, the next one, the time
+left, and **Back**, **Pause**, **Next** and **Stop**.
 
 Built on [NickWaterton/samsung-tv-ws-api](https://github.com/NickWaterton/samsung-tv-ws-api).
 The editor is ported from [image_crop_upscale](https://github.com/nathaniel-sheetz/image_crop_upscale).
@@ -145,6 +186,8 @@ The log is `~/Library/Logs/frame-tv.log`. To remove the service:
   not touched.
 - If Art Mode is off (someone is watching TV), setting a picture selects it
   without putting it on screen.
+- While a playlist runs, it asks the TV every 15 seconds whether Art Mode is on
+  and which picture is current. With no playlist running it asks nothing.
 
 ## API
 
@@ -173,6 +216,15 @@ The log is `~/Library/Logs/frame-tv.log`. To remove the service:
 | POST | `/api/library/{id}/remove-from-tv` | Remove its copy from the TV and keep the picture |
 | PUT, DELETE | `/api/library/{id}/tags/building-block` | Add or remove the building block tag |
 | DELETE | `/api/library/{id}` | Delete from the library. Refused while the picture is on the TV |
+| GET | `/api/playlists` | Every playlist with its pictures in order, and what is playing |
+| POST | `/api/playlists` | Make a playlist (`name`, and optionally `interval` in seconds, `shuffle`, `pictures`) |
+| GET, PATCH, DELETE | `/api/playlists/{id}` | One playlist. `PATCH` takes `name`, `interval`, `shuffle` or `order` (every picture id, in the new order) |
+| POST | `/api/playlists/{id}/pictures` | Add library pictures (`pictures`). The answer names any building blocks it left out |
+| DELETE | `/api/playlists/{id}/pictures/{picture}` | Take a picture out of the playlist |
+| POST | `/api/playlists/{id}/play` | Send its pictures to the TV and start it, in place of any other |
+| GET | `/api/playing` | The playlist that is running: state, current and next picture, seconds left. Does not ask the TV |
+| POST | `/api/playing/next`, `/back`, `/pause`, `/resume` | Control the playlist that is running |
+| POST | `/api/playing/stop` | Stop it. With `remove`, also take its pictures off the TV |
 
 Sources are library pictures, so `upload` and `fetch` add to the library and
 `{name}` is the library id plus the file's extension. Processed results are

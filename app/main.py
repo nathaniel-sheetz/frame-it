@@ -1,17 +1,32 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config, editor_routes, images, library_routes
+from . import config, editor_routes, images, library_routes, playlist_routes
 from .library import Library
+from .player import Player
+from .playlists import Playlists
 from .tv import FrameTV, NotAPhoto, TVUnavailable, check_photo_id
 
 cfg = config.load()
 tv = FrameTV(cfg)
 library = Library(cfg.library_path)
-app = FastAPI(title="Frame TV Art")
+playlists = Playlists(library)
+player = Player(tv, library, playlists)
+
+
+@asynccontextmanager
+async def lifespan(_):
+    # The playlist clock runs for as long as the app does.
+    player.start()
+    yield
+    player.close()
+
+
+app = FastAPI(title="Frame TV Art", lifespan=lifespan)
 
 STATIC = Path(__file__).parent / "static"
 config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
@@ -21,7 +36,8 @@ if config.EDITOR_UPLOAD_DIR.is_dir():
     editor_routes._sweep(config.EDITOR_UPLOAD_DIR)
 
 app.include_router(editor_routes.create_router(tv, library, config.EDITOR_PROCESSED_DIR))
-app.include_router(library_routes.create_router(tv, library))
+app.include_router(library_routes.create_router(tv, library, player))
+app.include_router(playlist_routes.create_router(player, playlists, library))
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -52,6 +68,11 @@ def editor_page():
 @app.get("/library")
 def library_page():
     return FileResponse(STATIC / "library.html")
+
+
+@app.get("/playlists")
+def playlists_page():
+    return FileResponse(STATIC / "playlists.html")
 
 
 @app.get("/api/art")
@@ -111,6 +132,7 @@ def select(content_id: str):
     shown = tv.select(content_id)
     if shown:
         library.shown(content_id)
+    player.chosen(content_id, shown)
     return {"id": content_id, "shown": shown}
 
 

@@ -137,6 +137,16 @@ class FrameTV:
                 "thumbs": thumbs,
             }
 
+    def now_showing(self) -> dict:
+        """Art mode state and the current artwork, without the photo list. Cheap enough to ask often."""
+        with self._art() as art:
+            return {"art_mode": art.get_artmode() == "on", "current": art.get_current().get("content_id")}
+
+    def photo_ids(self) -> set[str]:
+        """The content ids of everything in My Photos."""
+        with self._art() as art:
+            return {p["content_id"] for p in art.available(MY_PHOTOS)}
+
     def thumbnail(self, content_id: str) -> bytes | None:
         check_photo_id(content_id)
         with self._art() as art:

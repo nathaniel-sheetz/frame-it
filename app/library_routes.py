@@ -28,7 +28,7 @@ class EditRequest(BaseModel):
     subjects: Details | None = None
 
 
-def create_router(tv, library) -> APIRouter:
+def create_router(tv, library, player=None) -> APIRouter:
     router = APIRouter(prefix="/api/library")
 
     def find(image_id: str) -> dict:
@@ -101,6 +101,9 @@ def create_router(tv, library) -> APIRouter:
             raise HTTPException(503, str(e))
         if shown:
             library.shown(content_id)
+        if player:
+            # A running playlist carries on from this picture, or stops if it is not one of its own.
+            player.chosen(content_id, shown)
         return {"id": content_id, "shown": shown}
 
     @router.post("/{image_id}/remove-from-tv")

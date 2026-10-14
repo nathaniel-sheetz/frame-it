@@ -377,6 +377,13 @@ class Library:
         with self._db() as db:
             db.execute("UPDATE tv_copies SET removed_at = ? WHERE content_id = ? AND removed_at IS NULL", (_now(), content_id))
 
+    def copy_of(self, content_id: str) -> str | None:
+        """The id of the picture the TV holds under `content_id`, if the app sent it."""
+        with self._db() as db:
+            row = db.execute(
+                "SELECT image_id FROM tv_copies WHERE content_id = ? AND removed_at IS NULL", (content_id,)).fetchone()
+            return row["image_id"] if row else None
+
     def shown(self, content_id: str) -> None:
         """Note that the TV has this copy on display now."""
         with self._db() as db:

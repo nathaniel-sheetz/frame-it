@@ -193,3 +193,16 @@ class TestThumbnails:
         assert snap['thumbs'] == {}
         assert snap['art_mode'] is True
         assert snap['current'] == 'MY_F0002'
+
+
+class TestWatching:
+    @pytest.fixture(autouse=True)
+    def paired(self, token_file):
+        token_file.write_text('12345678')
+
+    def test_what_is_showing_is_asked_without_the_photo_list(self, television):
+        assert FrameTV(CFG).now_showing() == {'art_mode': True, 'current': 'MY_F0002'}
+        assert television.calls == ['open art', 'close art']
+
+    def test_the_ids_of_the_photos_on_the_tv(self, television):
+        assert FrameTV(CFG).photo_ids() == {'MY_F0001', 'MY_F0002'}
