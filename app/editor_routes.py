@@ -22,6 +22,9 @@ log = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_AGE_SECONDS = 24 * 60 * 60
+# The longest name a picture can be given. Names made here stay within it.
+MAX_NAME = 200
+MAX_STEM = 80
 # Pillow reports multi-picture JPEGs (many phones and cameras) as MPO.
 FORMATS = {"JPEG": "jpg", "MPO": "jpg", "PNG": "png", "WEBP": "webp", "BMP": "bmp"}
 
@@ -58,11 +61,11 @@ class DiptychRequest(BaseModel):
 
 class SendRequest(BaseModel):
     show: bool = False
-    name: str | None = Field(None, max_length=200)
+    name: str | None = Field(None, max_length=MAX_NAME)
 
 
 class SaveRequest(BaseModel):
-    name: str | None = Field(None, max_length=200)
+    name: str | None = Field(None, max_length=MAX_NAME)
 
 
 class FetchRequest(BaseModel):
@@ -93,12 +96,25 @@ def _sweep(folder: Path) -> None:
 def _stem(original_filename: str) -> str:
     """A safe base name for the suggested download name."""
     stem = Path(original_filename.replace("\\", "/")).stem
-    return re.sub(r"[^\w\- ]", "_", stem).strip() or "image"
+    # Short enough that two of them still make a name for a pair.
+    return re.sub(r"[^\w\- ]", "_", stem)[:MAX_STEM].strip() or "image"
 
 
 def _download_name(name: str | None, fallback: str) -> str:
     name = re.sub(r"[^\w\-. ]", "_", name or "").strip(" .") or fallback
-    return name if name.lower().endswith(".jpg") else f"{name}.jpg"
+    if name.lower().endswith(".jpg"):
+        return name
+    return f"{name[:MAX_NAME - 4].rstrip(' .')}.jpg"
+
+
+def _source_name(filename: str) -> str:
+    """The name a source is kept under: on one line, and short enough to be given back in a rename."""
+    name = " ".join(filename.split()) or "image.jpg"
+    if len(name) > MAX_NAME:
+        suffix = Path(name).suffix
+        suffix = suffix if len(suffix) <= 5 else ""
+        name = name[:MAX_NAME - len(suffix)].rstrip() + suffix
+    return name
 
 
 def create_router(tv, library, processed_dir: Path) -> APIRouter:
@@ -138,7 +154,7 @@ def create_router(tv, library, processed_dir: Path) -> APIRouter:
         }
 
     def keep(path: Path, name: str | None) -> dict:
-        """Move a processed result into the library, with the settings that made it."""
+        """Copy a processed result into the library, with the settings that made it."""
         try:
             draft = json.loads(path.with_suffix(".json").read_text())
         except (OSError, ValueError):
@@ -162,7 +178,11 @@ def create_router(tv, library, processed_dir: Path) -> APIRouter:
 
         _sweep(processed_dir)
         # A picture the library already holds comes back as the entry it has.
-        image = library.add_original(data, original_filename, extension, oriented, origin, origin_url)
+        try:
+            image = library.add_original(data, _source_name(original_filename), extension, oriented, origin, origin_url)
+        except OSError:
+            log.exception("A picture could not be kept in the library")
+            raise HTTPException(500, "The picture could not be saved to the library.")
         return {
             "success": True,
             "filename": image["file"],

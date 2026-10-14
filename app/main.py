@@ -16,7 +16,7 @@ app = FastAPI(title="Frame TV Art")
 STATIC = Path(__file__).parent / "static"
 config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
 
-# Sources live in the library now; what the old folder still holds runs out as it always did.
+# Sources live in the library now; what the old folder still holds is swept when the app starts.
 if config.EDITOR_UPLOAD_DIR.is_dir():
     editor_routes._sweep(config.EDITOR_UPLOAD_DIR)
 

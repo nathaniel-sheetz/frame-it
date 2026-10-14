@@ -18,7 +18,7 @@ any browser on the same network.
 ## Library
 
 The library keeps pictures on the computer running the app, in `data/library/`
-(a database, the pictures, and small previews). The folder is set by
+(a database, the pictures, and two sizes of preview). The folder is set by
 `[library] path` in `config.toml`. Nothing in it is deleted automatically.
 
 - **Originals** are kept as soon as they are uploaded or fetched. The same file

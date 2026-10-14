@@ -1,3 +1,4 @@
+import json
 import ssl
 
 import pytest
@@ -27,6 +28,8 @@ def television(monkeypatch):
             self.photos = ['MY_F0002', 'MY_F0001']
             # How many times the connection that carries thumbnails is dropped as it opens.
             self.dropped_transfers = 0
+            # How many times it is closed without an error instead, before anything was sent.
+            self.empty_replies = 0
 
     television = Television()
 
@@ -71,6 +74,10 @@ def television(monkeypatch):
             if television.dropped_transfers:
                 television.dropped_transfers -= 1
                 raise ssl.SSLEOFError('EOF occurred in violation of protocol')
+            if television.empty_replies:
+                television.empty_replies -= 1
+                # What the TV library does with the nothing it was sent.
+                json.loads('')
             return {f'{content_id}.jpg': bytearray(b'jpeg') for content_id in content_ids}
 
     monkeypatch.setattr(tv, 'SamsungTVWSConnection', Remote)
@@ -141,6 +148,28 @@ class TestThumbnails:
 
         assert television.calls.count('thumbnails MY_F0001') == tv.THUMBNAIL_TRIES
         assert television.calls[-1] == 'close art'
+
+    def test_a_transfer_closed_without_an_error_is_asked_for_again(self, television):
+        television.empty_replies = 2
+
+        assert FrameTV(CFG).thumbnail('MY_F0001') == b'jpeg'
+        assert television.calls.count('thumbnails MY_F0001') == 3
+
+    def test_a_transfer_that_keeps_closing_is_given_up_on(self, television):
+        television.empty_replies = 99
+
+        with pytest.raises(TVUnavailable, match='Could not reach the TV'):
+            FrameTV(CFG).thumbnail('MY_F0001')
+
+        assert television.calls.count('thumbnails MY_F0001') == tv.THUMBNAIL_TRIES
+
+    def test_the_list_comes_back_when_every_transfer_closes(self, television):
+        television.empty_replies = 99
+
+        snap = FrameTV(CFG).snapshot(set())
+
+        assert [p['content_id'] for p in snap['photos']] == ['MY_F0002', 'MY_F0001']
+        assert snap['thumbs'] == {}
 
     def test_the_list_only_asks_for_thumbnails_it_does_not_have(self, television):
         snap = FrameTV(CFG).snapshot({'MY_F0002'})

@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import pytest
 from PIL import Image, ImageOps
@@ -99,6 +100,50 @@ class TestOriginals:
         reopened = Library(library.root)
         assert reopened.get(image['id']) == image
         assert [kept['id'] for kept in reopened.list()] == [image['id']]
+
+
+def cut_short(monkeypatch, folder):
+    """Make every write into `folder` stop half way, as a full disk does."""
+    write_bytes = Path.write_bytes
+
+    def write_half(self, data):
+        if self.parent != folder:
+            return write_bytes(self, data)
+        write_bytes(self, data[:len(data) // 2])
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(Path, 'write_bytes', write_half)
+
+
+class TestWritesCutShort:
+    """A write that stops part way leaves nothing that could pass for the picture."""
+
+    def test_a_larger_preview_cut_short_is_made_again(self, library, monkeypatch):
+        image = original(library, 4000, 3000)
+        with monkeypatch.context() as m:
+            cut_short(m, library.views)
+            with pytest.raises(OSError):
+                library.view_path(image)
+        assert list(library.views.iterdir()) == []
+
+        with Image.open(library.view_path(image)) as view:
+            assert view.size == (1600, 1200)
+
+    @pytest.mark.parametrize('folder', ['files', 'thumbs'])
+    def test_a_picture_that_could_not_be_written_is_not_kept(self, library, monkeypatch, folder):
+        cut_short(monkeypatch, getattr(library, folder))
+        with pytest.raises(OSError):
+            original(library)
+        assert library.list() == []
+        assert list(library.files.iterdir()) == []
+        assert list(library.thumbs.iterdir()) == []
+
+    def test_a_picture_can_be_added_once_there_is_room_again(self, library, monkeypatch):
+        with monkeypatch.context() as m:
+            cut_short(m, library.thumbs)
+            with pytest.raises(OSError):
+                original(library)
+        assert original(library)['status'] == 'ready'
 
 
 class TestResults:
@@ -227,6 +272,15 @@ class TestRename:
     def test_a_full_stop_in_the_name_is_not_an_extension(self, library):
         image = original(library, name='St. Jerome in his Study')
         assert library.edit(image['id'], name='St. Jerome')['name'] == 'St. Jerome'
+
+    @pytest.mark.parametrize('name', ['Screenshot 10.30.45', 'v1.2', 'image.php'])
+    def test_only_a_picture_extension_is_kept(self, library, name):
+        image = original(library, name=name)
+        assert library.edit(image['id'], name='New')['name'] == 'New'
+
+    def test_the_extension_is_kept_as_it_was_written(self, library):
+        image = original(library, name='photo.JPEG')
+        assert library.edit(image['id'], name='Falls')['name'] == 'Falls.JPEG'
 
     @pytest.mark.parametrize('typed', ['', '   ', '.jpg'])
     def test_a_picture_needs_a_name(self, library, typed):

@@ -155,7 +155,7 @@ async function api(path, options) {
 
 function setBusy(value) {
   busy = value;
-  document.querySelectorAll('button').forEach(b => b.disabled = value);
+  document.querySelectorAll('button:not(#viewer-close)').forEach(b => b.disabled = value);
 }
 
 function size(bytes) {
@@ -171,7 +171,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const described = (picture, field) => [...picture[field], ...picture.from_originals[field]];
 
 // The part of a name that renaming leaves alone. The server uses the same rule.
-const extension = name => (name.match(/\.[A-Za-z0-9]{1,5}$/) || [''])[0];
+const extension = name => (name.match(/\.(jpe?g|png|webp|bmp)$/i) || [''])[0];
 
 function matches(picture) {
   const text = [picture.name, ...described(picture, 'creators'), ...described(picture, 'subjects')].join('\n').toLowerCase();

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import editor, editor_routes, fetch
-from app.editor_routes import _download_name, _stem, create_router
+from app.editor_routes import _download_name, _source_name, _stem, create_router
 from app.library import Library
 from app.tv import TVUnavailable
 
@@ -152,6 +152,22 @@ class TestUpload:
         resp = upload(client, image_bytes(800, 600))
         assert resp.status_code == 413
         assert list(dirs[0].iterdir()) == []
+
+    def test_upload_shortens_a_very_long_name(self, client):
+        name = upload(client, image_bytes(800, 600), 'x' * 230 + '.jpg').json()['original_filename']
+        assert name == 'x' * 196 + '.jpg'
+
+    def test_upload_names_a_picture_that_came_without_one(self, client):
+        assert upload(client, image_bytes(800, 600), '   ').json()['original_filename'] == 'image.jpg'
+
+    def test_upload_that_could_not_be_written_says_so(self, client, library, monkeypatch):
+        def full(*args, **kwargs):
+            raise OSError(28, 'No space left on device')
+
+        monkeypatch.setattr(library, 'add_original', full)
+        resp = upload(client, image_bytes(800, 600))
+        assert resp.status_code == 500
+        assert resp.json()['detail'] == 'The picture could not be saved to the library.'
 
     @pytest.mark.parametrize('name', ['photo.jpg', '..%5C..%5Cconfig.toml', '0' * 32 + '.gif'])
     def test_source_rejects_names_it_did_not_issue(self, client, name):
@@ -410,6 +426,20 @@ class TestSendToTV:
         assert resp.status_code == 502
         assert tv.selected == []
 
+    def test_send_under_the_name_suggested_for_a_long_one(self, client, tv):
+        src = upload(client, image_bytes(800, 600), 'x' * 230 + '.jpg').json()
+        data = process(client, src['filename'], original_filename=src['original_filename']).json()
+        assert len(data['suggested_filename']) <= 200
+        resp = client.post(data['url'] + '/send', json={'name': data['suggested_filename']})
+        assert resp.status_code == 200
+        assert len(tv.uploaded) == 1
+
+    def test_send_a_pair_under_the_name_suggested_for_two_long_ones(self, client, tv):
+        body = TestDiptych().body(client, original_filename1='l' * 96 + '.jpg', original_filename2='r' * 96 + '.jpg')
+        data = client.post('/api/editor/process-diptych', json=body).json()
+        assert len(data['suggested_filename']) <= 200
+        assert client.post(data['url'] + '/send', json={'name': data['suggested_filename']}).status_code == 200
+
 
 class TestSendSource:
     """The quick path: a stored source goes to the TV with the automatic fit."""
@@ -564,6 +594,25 @@ class TestKeeping:
     def test_save_unknown_result(self, client):
         assert client.post('/api/editor/result/' + '0' * 32 + '.jpg/save').status_code == 404
 
+    def test_a_sent_result_is_kept_under_the_name_it_was_given(self, client, library):
+        data = processed(client)
+        client.post(data['url'] + '/send', json={'name': 'Living room'})
+        assert library.get(data['filename'][:32])['name'] == 'Living room.jpg'
+
+    @pytest.mark.parametrize('settings', [None, 'not json'])
+    def test_a_result_whose_settings_are_lost_is_still_kept(self, client, library, dirs, settings):
+        data = processed(client)
+        beside = (dirs[1] / data['filename']).with_suffix('.json')
+        if settings is None:
+            beside.unlink()
+        else:
+            beside.write_text(settings)
+
+        resp = client.post(data['url'] + '/save')
+        assert resp.json()['name'] == f"frame_tv_{data['filename']}"
+        saved = library.get(data['filename'][:32])
+        assert (saved['recipe'], saved['parents']) == (None, [])
+
     def test_a_quick_send_keeps_what_was_sent(self, client, tv, library):
         src = upload(client, image_bytes(800, 600), 'Falls.jpg').json()
         client.post(src['url'] + '/send', json={'crop': False})
@@ -637,6 +686,7 @@ class TestNames:
         ('C:\\scans\\plate.tar.gz', 'plate_tar'),
         ('../../etc/passwd', 'passwd'),
         ('', 'image'),
+        ('y' * 100 + '.jpg', 'y' * 80),
     ])
     def test_stem(self, original, expected):
         assert _stem(original) == expected
@@ -647,6 +697,19 @@ class TestNames:
         ('a/b', 'a_b.jpg'),
         ('....', 'fallback.jpg'),
         (None, 'fallback.jpg'),
+        ('z' * 200, 'z' * 196 + '.jpg'),
     ])
     def test_download_name(self, name, expected):
         assert _download_name(name, 'fallback') == expected
+
+    @pytest.mark.parametrize('filename, expected', [
+        ('My Photo.jpg', 'My Photo.jpg'),
+        ('  My \n Photo.jpg ', 'My Photo.jpg'),
+        ('   ', 'image.jpg'),
+        ('x' * 230 + '.png', 'x' * 196 + '.png'),
+        ('x' * 230, 'x' * 200),
+        # Too long to be an extension, so it is not kept as one.
+        ('x' * 230 + '.notanextension', 'x' * 200),
+    ])
+    def test_source_name(self, filename, expected):
+        assert _source_name(filename) == expected

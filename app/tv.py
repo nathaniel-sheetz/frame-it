@@ -53,6 +53,10 @@ def _thumbnails(art, content_ids: list[str]) -> dict[str, bytes]:
         except OSError:
             if not tries_left:
                 raise
+        except (ValueError, KeyError) as e:
+            # A connection closed without an error leaves a reply that cannot be read. It is the same drop.
+            if not tries_left:
+                raise ConnectionError("The TV cut the thumbnail transfer short") from e
         else:
             return {Path(name).stem: bytes(data) for name, data in thumbs.items()}
 

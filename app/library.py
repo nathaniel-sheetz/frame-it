@@ -84,7 +84,8 @@ SELECT m.image_id, d.kind, d.value FROM made_from m JOIN details d ON d.image_id
 ORDER BY d.rowid
 """
 
-_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+# Only a picture's extension counts as one: "v1.2" and "Screenshot 10.30.45" have none.
+_EXTENSION = re.compile(r"\.(jpe?g|png|webp|bmp)$", re.IGNORECASE)
 
 
 class StillOnTV(Exception):
@@ -112,6 +113,17 @@ def _jpeg(image: Image.Image, size: tuple[int, int], quality: int) -> bytes:
 
 def _thumbnail(image: Image.Image) -> bytes:
     return _jpeg(image, THUMB_SIZE, 80)
+
+
+def _write(path: Path, data: bytes) -> None:
+    """Write a file whole or not at all, so a write cut short never passes for the picture."""
+    partial = path.with_name(f"{path.name}.part")
+    try:
+        partial.write_bytes(data)
+        partial.replace(path)
+    except OSError:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 def _distinct(values: Iterable[str]) -> list[str]:
@@ -161,18 +173,24 @@ class Library:
         with self._lock:
             if not path.is_file():
                 with Image.open(self.path(image["file"])) as full:
-                    path.write_bytes(_jpeg(ImageOps.exif_transpose(full), VIEW_SIZE, 85))
+                    _write(path, _jpeg(ImageOps.exif_transpose(full), VIEW_SIZE, 85))
         return path
 
     def _add(self, db, image_id, data, extension, thumb, **columns) -> None:
         file = f"{image_id}.{extension}"
-        self.path(file).write_bytes(data)
-        self.thumb_path(image_id).write_bytes(thumb)
         row = {"id": image_id, "file": file, "bytes": len(data), "added_at": _now(), **columns}
-        db.execute(
-            f"INSERT INTO images ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
-            list(row.values()),
-        )
+        try:
+            _write(self.path(file), data)
+            _write(self.thumb_path(image_id), thumb)
+            db.execute(
+                f"INSERT INTO images ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                list(row.values()),
+            )
+        except (OSError, sqlite3.Error):
+            # A picture that was not recorded leaves no files behind.
+            self.path(file).unlink(missing_ok=True)
+            self.thumb_path(image_id).unlink(missing_ok=True)
+            raise
 
     def add_original(self, data: bytes, name: str, extension: str, image: Image.Image,
                      origin: str, origin_url: str | None = None) -> dict:

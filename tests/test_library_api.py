@@ -1,4 +1,5 @@
 import io
+import sqlite3
 
 import pytest
 from fastapi import FastAPI
@@ -16,6 +17,7 @@ class FakeTV:
         self.selected = []
         self.deleted = []
         self.unavailable = False
+        self.select_unavailable = False
         self.art_mode = True
         self.confirms_delete = True
 
@@ -30,6 +32,8 @@ class FakeTV:
 
     def select(self, content_id):
         self._reach()
+        if self.select_unavailable:
+            raise TVUnavailable('Could not reach the TV.')
         self.selected.append(content_id)
         return self.art_mode
 
@@ -82,6 +86,10 @@ def picture(client, image_id):
     return client.get(f'/api/library/{image_id}').json()
 
 
+def results(client):
+    return [item for item in client.get('/api/library').json()['items'] if item['kind'] == 'result']
+
+
 class TestListing:
     def test_an_empty_library(self, client):
         assert client.get('/api/library').json() == {'items': [], 'count': 0, 'bytes': 0, 'on_tv': 0, 'ready': 0, 'blocks': 0}
@@ -114,6 +122,12 @@ class TestListing:
             assert img.size == (480, 360)
         assert client.get(f'/api/library/{image_id}/file').content == image_bytes(4000, 3000)
 
+    def test_preview_and_file_of_a_picture_whose_files_are_missing(self, client, library):
+        image_id = original(client)
+        library.path(f'{image_id}.jpg').unlink()
+        library.thumb_path(image_id).unlink()
+        for path in ('/thumb', '/file'):
+            assert client.get(f'/api/library/{image_id}{path}').status_code == 404
 
     def test_a_larger_preview_is_served(self, client):
         image_id = original(client, 4000, 3000)
@@ -180,6 +194,14 @@ class TestEdit:
         image_id = original(client)
         assert client.patch(f'/api/library/{image_id}', json=body).status_code == 422
 
+    def test_a_picture_that_came_with_a_very_long_name_can_still_be_edited(self, client):
+        image_id = original(client, name='x' * 230 + '.jpg')
+        name = picture(client, image_id)['name']
+        assert len(name) == 200
+        # The page sends the name back with every change, as it stands.
+        data = client.patch(f'/api/library/{image_id}', json={'name': name, 'creators': ['Monet']}).json()
+        assert (data['name'], data['creators']) == (name, ['Monet'])
+
     def test_editing_an_unknown_picture(self, client):
         assert client.patch('/api/library/' + '0' * 32, json={'name': 'Falls'}).status_code == 404
 
@@ -227,6 +249,41 @@ class TestSend:
     def test_send_unknown_picture(self, client, tv):
         assert client.post('/api/library/' + '0' * 32 + '/send').status_code == 404
         assert tv.uploaded == []
+
+    @pytest.mark.parametrize('kept', [original, saved_result])
+    def test_send_a_picture_whose_file_is_missing(self, client, tv, library, kept):
+        image_id = kept(client)
+        library.path(f'{image_id}.jpg').unlink()
+        resp = client.post(f'/api/library/{image_id}/send')
+        assert resp.status_code == 404
+        assert resp.json()['detail'] == "That picture's file is missing."
+        assert tv.uploaded == []
+
+    def test_an_original_is_not_made_into_a_picture_the_tv_never_got(self, client, tv):
+        tv.unavailable = True
+        image_id = original(client)
+        assert client.post(f'/api/library/{image_id}/send').status_code == 503
+        assert results(client) == []
+
+    def test_an_original_sent_but_not_displayed_is_still_recorded(self, client, tv):
+        tv.select_unavailable = True
+        image_id = original(client)
+        resp = client.post(f'/api/library/{image_id}/send', json={'show': True})
+        assert resp.status_code == 200
+        assert 'could not be put on display' in resp.json()['warning']
+        [result] = results(client)
+        assert picture(client, result['id'])['tv'] == ['MY_F0001']
+
+    def test_a_send_the_library_could_not_record_is_a_warning(self, client, tv, library, monkeypatch):
+        # The picture is on the TV by then; an error would invite a second, duplicate send.
+        def locked(*args, **kwargs):
+            raise sqlite3.OperationalError('database is locked')
+
+        monkeypatch.setattr(library, 'record_sent', locked)
+        resp = client.post(f'/api/library/{saved_result(client)}/send')
+        assert resp.status_code == 200
+        assert 'could not be saved to the library' in resp.json()['warning']
+        assert len(tv.uploaded) == 1
 
 
 class TestOnTheTV:
@@ -282,6 +339,39 @@ class TestOnTheTV:
         tv.unavailable = True
         assert client.post(f'/api/library/{image_id}/remove-from-tv').status_code == 503
         assert picture(client, image_id)['status'] == 'on-tv'
+
+    def twice_on_tv(self, client):
+        """A picture with two copies on the TV: the fit of an original that was sent twice."""
+        source = original(client)
+        client.post(f'/api/library/{source}/send')
+        client.post(f'/api/library/{source}/send')
+        [result] = results(client)
+        return result['id']
+
+    def test_display_shows_the_latest_copy(self, client, tv):
+        image_id = self.twice_on_tv(client)
+        assert client.post(f'/api/library/{image_id}/display').json()['id'] == 'MY_F0002'
+        assert tv.selected == ['MY_F0002']
+
+    def test_remove_takes_every_copy_off_the_tv(self, client, tv):
+        image_id = self.twice_on_tv(client)
+        resp = client.post(f'/api/library/{image_id}/remove-from-tv')
+        assert resp.json() == {'id': image_id, 'removed': ['MY_F0001', 'MY_F0002']}
+        assert tv.deleted == ['MY_F0001', 'MY_F0002']
+        assert picture(client, image_id)['tv'] == []
+
+    def test_a_remove_that_stops_part_way_keeps_the_copies_that_are_left(self, client, tv):
+        image_id = self.twice_on_tv(client)
+        confirmed = iter([True, False])
+        tv.delete = lambda content_id: next(confirmed)
+        assert client.post(f'/api/library/{image_id}/remove-from-tv').status_code == 502
+        assert picture(client, image_id)['tv'] == ['MY_F0002']
+
+    def test_remove_a_picture_that_is_not_on_the_tv(self, client, tv):
+        image_id = saved_result(client)
+        resp = client.post(f'/api/library/{image_id}/remove-from-tv')
+        assert resp.json() == {'id': image_id, 'removed': []}
+        assert tv.deleted == []
 
     def test_a_picture_on_the_tv_cannot_be_deleted(self, client):
         image_id = self.on_tv(client)

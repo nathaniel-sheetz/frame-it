@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from . import sending
-from .editor_routes import _stem
+from .editor_routes import MAX_NAME, _stem
 from .library import StillOnTV, summary
 from .tv import TVUnavailable
 
@@ -23,7 +23,7 @@ Details = Annotated[list[Annotated[str, Field(max_length=100)]], Field(max_lengt
 
 
 class EditRequest(BaseModel):
-    name: str | None = Field(None, max_length=200)
+    name: str | None = Field(None, max_length=MAX_NAME)
     creators: Details | None = None
     subjects: Details | None = None
 
@@ -79,6 +79,8 @@ def create_router(tv, library) -> APIRouter:
     @router.post("/{image_id}/send")
     def send(image_id: str, req: SendRequest = SendRequest()):
         image = find(image_id)
+        if not library.path(image["file"]).is_file():
+            raise HTTPException(404, "That picture's file is missing.")
         if image["kind"] == "original":
             # An original is never sent as it is: the TV gets a copy fitted to the screen.
             return sending.send_fitted(tv, library, image, f"{_stem(image['name'])}_fit.jpg", True, req.show)
