@@ -11,6 +11,17 @@
   #filters button.chosen { border-color: var(--accent); color: var(--accent); }
   #filters .n { color: var(--muted); margin-left: 4px; }
   #find { flex: 1; min-width: 220px; max-width: 420px; }
+  #choosing {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 16px; padding: 10px 12px;
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 10px;
+  }
+  #choosing[hidden] { display: none; }
+  #to {
+    font: inherit; font-size: 16px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px;
+  }
+  .card.chosen { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .choosing .thumb a { cursor: copy; }
 
   /* 16px, so a phone does not zoom the page in when a box is tapped. */
   input[type=text], input[type=search] {
@@ -81,6 +92,7 @@
   <span id="state" class="pill err" hidden>TV unreachable: "On TV" may be out of date</span>
   <span class="spacer"></span>
   <a class="nav-link" href="/">Gallery</a>
+  <a class="nav-link" href="/playlists">Playlists</a>
   <a class="nav-link" href="/editor">Editor</a>
 </header>
 <main>
@@ -96,6 +108,15 @@
   <div id="bar">
     <div id="filters"></div>
     <input type="search" id="find" placeholder="Find by name, creator or subject" aria-label="Find pictures">
+    <button id="choose">Select for a playlist</button>
+  </div>
+  <div id="choosing" hidden>
+    <span id="chosen-count"></span>
+    <select id="to" aria-label="Playlist"></select>
+    <button id="add-chosen" class="primary">Add to playlist</button>
+    <span class="hint">Tap pictures to select them.</span>
+    <span class="spacer"></span>
+    <button id="choose-done">Done</button>
   </div>
   <div id="msg"></div>
   <div id="grid"></div>
@@ -122,6 +143,7 @@
   <datalist id="known-creators"></datalist>
   <datalist id="known-subjects"></datalist>
 </dialog>
+<script src="/static/playing.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const grid = $('grid'), msg = $('msg');
@@ -138,6 +160,9 @@ const LABELS = { 'on-tv': 'On TV', ready: 'Ready', block: 'Building block', orig
 
 let busy = false;
 let data = { items: [], count: 0 };
+// Picking pictures for a playlist: a tap selects a card instead of opening it.
+let choosing = false;
+const chosen = new Set();
 // Kept in the address, so a reload or a bookmark comes back to the same filter.
 let filter = FILTERS.find(f => f.key === location.hash.slice(1)) || FILTERS[0];
 
@@ -230,6 +255,8 @@ function render() {
 
   const pictures = found.filter(filter.has);
   grid.replaceChildren();
+  grid.classList.toggle('choosing', choosing);
+  $('chosen-count').textContent = `${chosen.size} selected`;
   if (!pictures.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
@@ -244,7 +271,7 @@ function render() {
 
 function card(picture) {
   const el = document.createElement('div');
-  el.className = 'card';
+  el.className = 'card' + (chosen.has(picture.id) ? ' chosen' : '');
 
   const thumb = document.createElement('div');
   thumb.className = 'thumb';
@@ -252,11 +279,12 @@ function card(picture) {
   const full = document.createElement('a');
   full.href = `/api/library/${picture.id}/file`;
   full.target = '_blank';
-  full.title = 'Look at the picture and its details';
+  full.title = choosing ? 'Select for the playlist' : 'Look at the picture and its details';
   full.onclick = e => {
     if (e.ctrlKey || e.metaKey || e.shiftKey) return;
     e.preventDefault();
-    view(picture);
+    if (choosing) choose(picture);
+    else view(picture);
   };
   const img = document.createElement('img');
   img.loading = 'lazy';
@@ -462,6 +490,8 @@ async function run(label, fn) {
   busy = false;
   await load().catch(e => say(e.message, true));
   setBusy(false);
+  // Displaying a picture, or adding some to a playlist, can change what is playing.
+  window.playingChanged();
 }
 
 function send(picture) {
@@ -506,6 +536,74 @@ function remove(picture) {
     return 'Deleted.';
   });
 }
+
+function choose(picture) {
+  if (busy) return;
+  if (picture.building_block) {
+    say(`${picture.name} is a building block. Edit it for the screen first, then add the result.`, true);
+    return;
+  }
+  say('');
+  if (!chosen.delete(picture.id)) chosen.add(picture.id);
+  render();
+}
+
+// Offer the playlists there are, and a new one. `wanted` is the one to start on.
+async function offerPlaylists(wanted) {
+  const { items } = await api('/api/playlists');
+  $('to').replaceChildren(...items.map(p => new Option(p.name, p.id)), new Option('A new playlist…', 'new'));
+  if (items.some(p => String(p.id) === String(wanted))) $('to').value = wanted;
+}
+
+async function setChoosing(value, wanted) {
+  if (value) {
+    try {
+      await offerPlaylists(wanted);
+    } catch (e) {
+      say(e.message, true);
+      return;
+    }
+  }
+  choosing = value;
+  chosen.clear();
+  $('choosing').hidden = !value;
+  $('choose').hidden = value;
+  render();
+}
+
+function addChosen() {
+  const to = $('to').selectedOptions[0];
+  const pictures = data.items.filter(p => chosen.has(p.id));
+  if (!pictures.length) {
+    say('Tap the pictures to add first.', true);
+    return;
+  }
+  let name = to.textContent;
+  if (to.value === 'new') {
+    name = (prompt('Name the new playlist') || '').trim();
+    if (!name) return;
+  }
+  run('Adding to the playlist…', async () => {
+    const ids = pictures.map(p => p.id);
+    const post = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = to.value === 'new'
+      ? await api('/api/playlists', post({ name, pictures: ids }))
+      : await api(`/api/playlists/${to.value}/pictures`, post({ pictures: ids }));
+    chosen.clear();
+    await offerPlaylists(r.playlist.id).catch(() => {});
+    const fitted = pictures.filter(p => p.kind === 'original').length;
+    let text = `Added ${plural(r.added, 'picture')} to ${name}.`;
+    if (r.added < pictures.length - r.refused.length) text += ' The rest were in it already.';
+    // Tagged as a building block since this page loaded.
+    if (r.refused.length) text += ` Left out as building blocks: ${r.refused.join(', ')}.`;
+    if (fitted) text += ` ${plural(fitted, 'original')} went in fitted to the screen, and the fitted ${fitted === 1 ? 'copy is' : 'copies are'} in the library too.`;
+    return text;
+  });
+}
+
+$('choose').onclick = () => setChoosing(true);
+$('choose-done').onclick = () => setChoosing(false);
+$('add-chosen').onclick = addChosen;
 
 // Spaces and accented characters are encoded the way the address bar would, so the server can ask for them.
 function encodedLink(url) {
@@ -596,6 +694,9 @@ drop.addEventListener('drop', e => { if (!ours) dropped(e.dataTransfer); });
 // the remote. Asking for the gallery's list brings the "On TV" labels up to date.
 async function start() {
   await load().catch(e => say(e.message, true));
+  // Arriving from a playlist's "Add pictures" goes straight to picking them for it.
+  const wanted = new URLSearchParams(location.search).get('playlist');
+  if (wanted) await setChoosing(true, wanted);
   try {
     await api('/api/art');
     if (!busy) await load();

@@ -293,6 +293,19 @@ header h1 {
     flex-wrap: wrap;
 }
 
+.toggle-label[hidden] {
+    display: none;
+}
+
+.playlist-select {
+    padding: 6px 10px;
+    background: var(--inset);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font: inherit;
+}
+
 /* Filename Edit */
 .filename-edit {
     display: flex;

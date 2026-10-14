@@ -29,6 +29,13 @@ def deliver(tv, data: bytes, show: bool) -> dict:
     return sent
 
 
+def chosen(player, sent: dict) -> dict:
+    """Tell a running playlist about a picture sent to be displayed. It carries on from it, or stops."""
+    if player and sent["selected"]:
+        player.chosen(sent["id"], sent["shown"])
+    return sent
+
+
 def record(library, sent: dict, keep) -> dict:
     """Note in the library that a picture is now on the TV.
 
@@ -46,12 +53,22 @@ def record(library, sent: dict, keep) -> dict:
     return sent
 
 
-def send_fitted(tv, library, original: dict, name: str, crop: bool, show: bool) -> dict:
-    """Send a library picture with the automatic fit, keeping what was sent as a result of it."""
+def _fitted(library, original: dict, name: str, crop: bool):
+    """The automatic fit of a library picture, and a way to keep it as a result of that picture."""
     try:
         jpeg = images.prepare(library.path(original["file"]).read_bytes(), crop)
     except images.BadImage as e:
         raise HTTPException(400, str(e))
-    sent = deliver(tv, jpeg, show)
-    return record(library, sent, lambda: library.keep_result(
-        jpeg, name, {"type": "auto", "crop": crop}, [(original["id"], None)], origin="auto-fit"))
+    return jpeg, lambda: library.keep_result(
+        jpeg, name, {"type": "auto", "crop": crop}, [(original["id"], None)], origin="auto-fit")
+
+
+def send_fitted(tv, library, original: dict, name: str, crop: bool, show: bool) -> dict:
+    """Send a library picture with the automatic fit, keeping what was sent as a result of it."""
+    jpeg, keep = _fitted(library, original, name, crop)
+    return record(library, deliver(tv, jpeg, show), keep)
+
+
+def fit(library, original: dict, name: str) -> dict:
+    """Keep the automatic fit of a library picture without sending it. The same picture gives the same fit."""
+    return _fitted(library, original, name, True)[1]()

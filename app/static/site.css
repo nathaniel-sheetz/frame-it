@@ -66,3 +66,17 @@ button.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--d
 .actions { display: flex; gap: 8px; padding: 10px 12px 12px; }
 .actions > :first-child { flex: 1; }
 .empty { color: var(--muted); padding: 40px 0; text-align: center; grid-column: 1 / -1; }
+
+/* The playlist that is running, under the header of every page. Filled in by playing.js. */
+#playing {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+#playing[hidden] { display: none; }
+#playing img { width: 96px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: #000; }
+#playing .what { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+#playing .what a { color: var(--accent); font-weight: 600; text-decoration: none; }
+#playing .what a:hover { text-decoration: underline; }
+#playing .when { font-size: 12px; color: var(--muted); }
+#playing .when.err { color: var(--danger); }
+#playing .controls { display: flex; flex-wrap: wrap; gap: 8px; }

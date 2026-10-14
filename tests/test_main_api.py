@@ -1,6 +1,7 @@
 import importlib
 import io
 import sys
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -56,10 +57,10 @@ def client(main):
     return TestClient(main.app)
 
 
-def sent(main, content_id='MY_F0001'):
+def sent(main, content_id='MY_F0001', color='red'):
     """A library picture with a copy on the TV, and its id."""
     buf = io.BytesIO()
-    Image.new('RGB', (3840, 2160), color='red').save(buf, format='JPEG')
+    Image.new('RGB', (3840, 2160), color=color).save(buf, format='JPEG')
     image = main.library.keep_result(buf.getvalue(), 'Falls_4k.jpg', None, [])
     main.library.record_sent(image['id'], content_id)
     return image['id']
@@ -127,3 +128,33 @@ class TestGallery:
         resp = client.get('/library')
         assert resp.status_code == 200
         assert resp.headers['content-type'].startswith('text/html')
+
+
+class TestPlaylists:
+    @pytest.fixture
+    def playing(self, main):
+        """A playlist of two pictures on the TV, with the first one up. Returns their ids."""
+        held = [sent(main, 'MY_F0001'), sent(main, 'MY_F0002', 'blue')]
+        playlist = main.playlists.create('Evening')
+        main.playlists.add(playlist['id'], held)
+        main.playlists.begin(playlist['id'])
+        main.playlists.note(state='playing', image_id=held[0], content_id='MY_F0001')
+        return held
+
+    def test_the_playlists_page_is_served(self, client):
+        resp = client.get('/playlists')
+        assert resp.status_code == 200
+        assert resp.headers['content-type'].startswith('text/html')
+
+    def test_the_clock_runs_while_the_app_does(self, main):
+        with TestClient(main.app):
+            assert any(thread.name == 'playlist' for thread in threading.enumerate())
+
+    def test_setting_one_of_its_pictures_as_art_carries_the_playlist_on_from_it(self, client, playing):
+        client.post('/api/art/MY_F0002/select')
+        assert client.get('/api/playing').json()['playing']['current']['id'] == playing[1]
+
+    def test_setting_any_other_picture_as_art_stops_the_playlist(self, client, playing):
+        client.post('/api/art/MY_F0003/select')
+        assert client.get('/api/playing').json() == {
+            'playing': None, 'ended': 'Evening stopped because another picture was chosen.'}

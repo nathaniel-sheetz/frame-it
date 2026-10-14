@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.4.0.0] - 2026-10-14
+
+### Added
+
+- Playlists at `/playlists`: a set of library pictures, an order and one time
+  for each picture to stay up, from 1 minute to 30 days. The app keeps the
+  clock instead of the TV's slideshow, and only time on screen in Art Mode
+  counts. Where a playlist has got to survives a restart.
+- Pressing Play sends the pictures the TV does not have yet, then starts. One
+  playlist plays at a time. Shuffle plays every picture once before any again.
+- The order can be changed, and pictures added or taken out, while a playlist
+  plays. Added pictures, and ones whose copy was removed from the TV, are sent
+  straight away.
+- Choosing one of the playlist's pictures by hand carries on from it; choosing
+  anything else stops the playlist. Choices made on this app's pages, including
+  sending a picture with "Display now", are acted on at once. Choices made with
+  the remote are noticed within about half a minute.
+- A strip under the header of the gallery, library and playlists pages shows
+  the running playlist with Back, Pause, Next and Stop. Stopping can also take
+  the playlist's pictures off the TV.
+- The library page can select pictures for a playlist, and the editor can put
+  a result in a playlist as it is sent or saved.
+- Playlist API: `/api/playlists` (list, create, get, `PATCH`, delete, add and
+  remove pictures, play) and `/api/playing` (status, next, back, pause,
+  resume, stop).
+- A picture the TV will not take, when its storage is full for example, does
+  not hold up the playlist: it is left out for ten minutes and then tried
+  again, and the clock keeps running.
+
 ## [0.3.0.0] - 2026-10-13
 
 ### Added

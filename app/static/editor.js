@@ -73,6 +73,8 @@ const sendBtn = document.getElementById('send-btn');
 const saveBtn = document.getElementById('save-btn');
 const showToggle = document.getElementById('show-toggle');
 const sendStatus = document.getElementById('send-status');
+const playlistChoice = document.getElementById('playlist-choice');
+const playlistSelect = document.getElementById('playlist-select');
 const letterboxToggle = document.getElementById('letterbox-toggle');
 const letterboxHint = document.getElementById('letterbox-hint');
 
@@ -514,6 +516,60 @@ function showProcessStatus(message, type) {
 function initializeSend() {
     sendBtn.addEventListener('click', sendToTV);
     saveBtn.addEventListener('click', saveToLibrary);
+    loadPlaylists();
+}
+
+// Offer the playlists there are. With none, the choice stays hidden.
+async function loadPlaylists() {
+    try {
+        const response = await fetch('/api/playlists');
+        const data = await readJson(response);
+        for (const playlist of data.items || []) {
+            playlistSelect.append(new Option(playlist.name, playlist.id));
+        }
+        playlistChoice.hidden = playlistSelect.options.length < 2;
+    } catch (error) {
+        // Sending and saving work without it.
+    }
+}
+
+// Keep the result in the library. Returns what the library calls it.
+async function keep() {
+    const response = await fetch(`${state.resultUrl}/save`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: keptName() })
+    });
+    const data = await readJson(response);
+    if (!response.ok) {
+        throw new Error(errorText(data, 'Save failed'));
+    }
+    return data;
+}
+
+// Put a kept result in the chosen playlist. Returns the words to add to the message.
+async function addToPlaylist(imageId) {
+    const playlist = playlistSelect.selectedOptions[0];
+    if (!playlist.value) {
+        return '';
+    }
+    try {
+        const response = await fetch(`/api/playlists/${playlist.value}/pictures`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ pictures: [imageId] })
+        });
+        if (!response.ok) {
+            throw new Error(errorText(await readJson(response), 'request failed'));
+        }
+        return ` Added to ${playlist.textContent}.`;
+    } catch (error) {
+        return ` It could not be added to ${playlist.textContent}: ${error.message}.`;
+    }
 }
 
 // The library keeps the result under the name in the filename box.
@@ -530,6 +586,9 @@ async function sendToTV() {
     showSendStatus('Sending to the TV...', 'loading');
 
     try {
+        // A playlist takes library pictures, and sending does not say which one this became.
+        // Kept first, it is the same library picture when it is sent.
+        const kept = playlistSelect.value ? await keep() : null;
         const response = await fetch(`${state.resultUrl}/send`, {
             method: 'POST',
             headers: {
@@ -544,14 +603,15 @@ async function sendToTV() {
             // The button stays disabled so the same result is not sent twice.
             // Sending kept it in the library, so there is nothing left to save.
             saveBtn.disabled = true;
+            const added = kept ? await addToPlaylist(kept.id) : '';
             if (data.warning) {
-                showSendStatus(data.warning, 'error');
+                showSendStatus(data.warning + added, 'error');
             } else if (data.shown) {
-                showSendStatus('Sent. It is on display now.', 'success');
+                showSendStatus('Sent. It is on display now.' + added, 'success');
             } else if (data.selected) {
-                showSendStatus('Sent and selected. Art Mode is off, so it was not put on screen.', 'success');
+                showSendStatus('Sent and selected. Art Mode is off, so it was not put on screen.' + added, 'success');
             } else {
-                showSendStatus('Sent to the TV.', 'success');
+                showSendStatus('Sent to the TV.' + added, 'success');
             }
         } else {
             showSendStatus(errorText(data, 'Send failed'), 'error');
@@ -573,24 +633,10 @@ async function saveToLibrary() {
     showSendStatus('Saving...', 'loading');
 
     try {
-        const response = await fetch(`${state.resultUrl}/save`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ name: keptName() })
-        });
-
-        const data = await readJson(response);
-
-        if (response.ok) {
-            showSendStatus(`Saved to the library as ${data.name}.`, 'success');
-        } else {
-            showSendStatus(errorText(data, 'Save failed'), 'error');
-            saveBtn.disabled = false;
-        }
+        const data = await keep();
+        showSendStatus(`Saved to the library as ${data.name}.` + await addToPlaylist(data.id), 'success');
     } catch (error) {
-        showSendStatus('Save failed: ' + error.message, 'error');
+        showSendStatus(error.message, 'error');
         saveBtn.disabled = false;
     }
 }

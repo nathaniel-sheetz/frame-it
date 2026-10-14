@@ -13,6 +13,7 @@
         <span class="spacer"></span>
         <a class="nav-link" href="/">Gallery</a>
         <a class="nav-link" href="/library">Library</a>
+        <a class="nav-link" href="/playlists">Playlists</a>
     </header>
 
     <div class="container">
@@ -121,7 +122,7 @@
                 <div class="result-preview">
                     <img id="result-image" src="" alt="Processed picture">
                 </div>
-                <p class="instruction">This is what the TV will show. Not right? Change the crop above and process again. Sending keeps it in the library; Save to library keeps it without sending.</p>
+                <p class="instruction">This is what the TV will show. Not right? Change the crop above and process again. Sending keeps it in the library; Save to library keeps it without sending. Either one also puts it in the playlist you choose.</p>
                 <div class="send-row">
                     <button id="send-btn" class="btn btn-primary">Send to TV</button>
                     <label class="toggle-label">
@@ -129,6 +130,12 @@
                         <span class="toggle-text">Display now</span>
                     </label>
                     <button id="save-btn" class="btn btn-secondary">Save to library</button>
+                    <label class="toggle-label" id="playlist-choice" hidden>
+                        <span class="toggle-text">Add to playlist</span>
+                        <select id="playlist-select" class="playlist-select">
+                            <option value="">None</option>
+                        </select>
+                    </label>
                 </div>
                 <div id="send-status"></div>
                 <div class="filename-edit">

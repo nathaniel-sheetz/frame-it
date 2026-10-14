@@ -117,7 +117,7 @@ def _source_name(filename: str) -> str:
     return name
 
 
-def create_router(tv, library, processed_dir: Path) -> APIRouter:
+def create_router(tv, library, processed_dir: Path, player=None) -> APIRouter:
     router = APIRouter(prefix="/api/editor")
     _sweep(processed_dir)
 
@@ -219,7 +219,8 @@ def create_router(tv, library, processed_dir: Path) -> APIRouter:
         original = library.get(Path(name).stem)
         if not original:
             raise HTTPException(404, "File not found")
-        return sending.send_fitted(tv, library, original, f"{_stem(original['name'])}_fit.jpg", req.crop, req.show)
+        return sending.chosen(player, sending.send_fitted(
+            tv, library, original, f"{_stem(original['name'])}_fit.jpg", req.crop, req.show))
 
     @router.post("/process")
     def process(req: ProcessRequest):
@@ -272,7 +273,7 @@ def create_router(tv, library, processed_dir: Path) -> APIRouter:
         # The processed JPEG goes to the TV byte-for-byte; no second re-encode.
         path = result_path(filename)
         sent = sending.deliver(tv, path.read_bytes(), req.show)
-        return sending.record(library, sent, lambda: keep(path, req.name))
+        return sending.chosen(player, sending.record(library, sent, lambda: keep(path, req.name)))
 
     @router.post("/result/{filename}/save")
     def save(filename: str, req: SaveRequest = SaveRequest()):
