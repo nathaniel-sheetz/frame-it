@@ -18,6 +18,11 @@
     box-sizing: border-box;
 }
 
+/* Hidden means hidden, even for the parts laid out with flex below. */
+[hidden] {
+    display: none !important;
+}
+
 body {
     font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
     background: var(--bg);
@@ -81,37 +86,6 @@ header h1 {
     margin-bottom: 15px;
 }
 
-/* Upload Area */
-.upload-area {
-    border: 2px dashed var(--line);
-    border-radius: 8px;
-    padding: 48px 20px;
-    text-align: center;
-    cursor: pointer;
-    transition: border-color 0.2s ease, background 0.2s ease;
-}
-
-.upload-area:hover,
-.upload-area.dragover {
-    border-color: var(--accent);
-    background: #1c1a14;
-}
-
-.upload-prompt svg {
-    color: var(--accent);
-    margin-bottom: 15px;
-}
-
-.upload-prompt p {
-    font-size: 1.1rem;
-    margin-bottom: 8px;
-}
-
-.file-types {
-    color: var(--muted);
-    font-size: 0.9rem;
-}
-
 .link-row {
     display: flex;
     gap: 10px;
@@ -134,18 +108,13 @@ header h1 {
     border-color: var(--accent);
 }
 
-#upload-status,
-#upload-status-2,
 #process-status,
-#send-status {
+#send-status,
+#page-status,
+#queue-status {
     margin-top: 15px;
     text-align: center;
     min-height: 1.45em;
-}
-
-/* Letterbox Toggle */
-.letterbox-toggle {
-    margin-bottom: 15px;
 }
 
 .toggle-label {
@@ -158,16 +127,6 @@ header h1 {
 
 .toggle-text {
     font-weight: 500;
-}
-
-.toggle-hint {
-    background: var(--inset);
-    border: 1px solid var(--line);
-    padding: 10px 15px;
-    border-radius: 6px;
-    color: var(--accent);
-    font-size: 0.9rem;
-    margin-top: 8px;
 }
 
 /* Image Container */
@@ -343,18 +302,6 @@ header h1 {
     font-weight: 600;
 }
 
-/* Diptych Controls */
-#diptych-controls {
-    text-align: center;
-    padding-top: 10px;
-    margin-top: 15px;
-    border-top: 1px solid var(--line);
-}
-
-#diptych-controls .btn {
-    margin-top: 10px;
-}
-
 .warning-text {
     color: var(--accent);
     font-size: 0.9rem;
@@ -413,6 +360,235 @@ input[type="checkbox"] {
     accent-color: var(--accent);
 }
 
+#page-status:empty,
+#queue-status:empty {
+    display: none;
+}
+
+#page-status {
+    margin: 0 0 16px;
+}
+
+/* The batch: where it is, and a strip of its pictures */
+.queue-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.queue-head h2 {
+    margin-bottom: 0;
+}
+
+.queue-strip {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 12px 0 4px;
+}
+
+.queue-thumb {
+    position: relative;
+    flex: 0 0 auto;
+    width: 96px;
+    aspect-ratio: 16 / 9;
+    padding: 0;
+    background: #000;
+    border: 2px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.queue-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.queue-thumb.current {
+    border-color: var(--accent);
+}
+
+.queue-thumb.marked img {
+    opacity: 0.4;
+}
+
+.queue-mark {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    color: var(--ok);
+    font-weight: 700;
+    text-shadow: 0 0 3px #000;
+}
+
+.queue-thumb.skipped .queue-mark,
+.queue-thumb:not(.marked) .queue-mark {
+    color: var(--muted);
+}
+
+.queue-thumb.missing .queue-mark {
+    color: var(--danger);
+}
+
+#queue-done {
+    margin-top: 12px;
+    color: var(--muted);
+}
+
+#queue-done a {
+    color: var(--accent);
+}
+
+/* Layout: fill, bars or pair */
+.layout-choice {
+    display: inline-flex;
+    flex-wrap: wrap;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.layout-choice label {
+    position: relative;
+    cursor: pointer;
+}
+
+.layout-choice input {
+    position: absolute;
+    opacity: 0;
+}
+
+.layout-choice span {
+    display: block;
+    padding: 8px 16px;
+    border-right: 1px solid var(--line);
+}
+
+.layout-choice label:last-child span {
+    border-right: 0;
+}
+
+.layout-choice input:checked + span {
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+}
+
+.layout-choice input:focus-visible + span {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.second-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+/* The picker: library pictures to choose from */
+.picker-search {
+    width: 100%;
+    margin-bottom: 12px;
+    font-size: 16px;
+}
+
+.picker-group h3 {
+    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 4px 0 8px;
+}
+
+.picker-group {
+    margin-bottom: 12px;
+}
+
+.picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.pick-tile {
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+    padding: 0;
+    background: var(--inset);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    font: inherit;
+}
+
+.pick-tile:hover,
+.pick-tile:focus-visible {
+    border-color: var(--accent);
+    outline: none;
+}
+
+.pick-tile img {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: contain;
+    background: #000;
+    display: block;
+}
+
+.pick-name {
+    padding: 6px 8px 0;
+    font-size: 0.85rem;
+    overflow-wrap: anywhere;
+}
+
+.pick-meta {
+    padding: 2px 8px 8px;
+    font-size: 0.75rem;
+    color: var(--muted);
+}
+
+.picker-add {
+    border: 2px dashed var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.picker-add.dragover {
+    border-color: var(--accent);
+    background: #1c1a14;
+}
+
+.picker-add .link-row {
+    flex: 1 1 260px;
+    margin-top: 0;
+}
+
+.picker-status {
+    flex-basis: 100%;
+}
+
+.picker-status:empty {
+    display: none;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .card {
@@ -422,5 +598,11 @@ input[type="checkbox"] {
     .filename-input {
         min-width: 0;
         width: 100%;
+    }
+
+    /* Two or three to a row on a phone, not one large one. */
+    .picker-grid {
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 8px;
     }
 }

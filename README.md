@@ -7,15 +7,38 @@ any browser on the same network.
   pictures. Add a picture (JPEG, PNG, WEBP or BMP) from a file or a link, then
   choose: **Send to TV** with an automatic centre crop, or **Custom fit** to
   open it in the editor.
-- **Editor** (`/editor`): crop a picture for the Frame's 3840×2160 panel, with
-  optional letterboxing or a side-by-side pair, review the result, and send it
-  straight to the TV. Pictures can come from a file or a link here too.
+- **Editor** (`/editor`): crop a library picture for the Frame's 3840×2160
+  panel, review the result, and send it to the TV or save it. See
+  [Editor](#editor) below.
 - **Library** (`/library`): every picture you have brought in, and every result
   you sent to the TV or saved. Send a picture again, take it off the TV without
-  losing it, or open an original in the editor. Drop pictures or links here to
+  losing it, or open any picture in the editor. Drop pictures or links here to
   keep them without sending them anywhere.
 - **Playlists** (`/playlists`): put library pictures in an order and have the
   TV change from one to the next on a timer.
+
+## Editor
+
+The editor works on pictures already in the library. It opens from **Edit** on a
+library card, from **Custom fit** in the gallery, or at `/editor` on its own,
+which offers the library to pick from.
+
+- **Layout.** **Fill the screen** crops to 16:9. **Whole picture with bars**
+  crops freely and fills the rest with black. **Pair with another** puts a
+  second picture beside the first. A picture narrower than square opens ready to
+  be paired.
+- **The second picture** is chosen from the library. The pictures listed first
+  lose the least when cropped to the space the first picture leaves, and each
+  shows how much of it is kept. A picture can also be added there from a file or
+  a link.
+- **Editing a result again.** **Edit** on a result opens its originals with
+  the crops, layout and gap it was made with. Saving or sending makes a new
+  result; the old one stays in the library.
+- **Several at once.** In the library, **Select** some pictures, then **Edit
+  one by one**. The editor shows the batch as a strip with **Back** and
+  **Skip**, and opens the next one after each save or send. When pairing,
+  pictures from the batch are offered first, and a picture used as the second
+  of a pair counts as done.
 
 ## Library
 
@@ -94,8 +117,8 @@ runs while the app is running and can reach the TV. Where a playlist has got to
 is kept in the library's database and survives a restart.
 
 - **Making one.** Name it on the playlists page, then **Add pictures from the
-  library**: that opens the library with **Select for a playlist** switched on,
-  where a tap selects a picture. The editor's review step can also put a result
+  library**: that opens the library with **Select** switched on, where a tap
+  selects a picture. The editor's review step can also put a result
   in a playlist as it is sent or saved.
 - **What can go in.** A result goes in as it is. An original goes in as its
   automatic 16:9 fit, which is kept in the library like any other result. A

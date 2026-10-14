@@ -120,7 +120,7 @@
     <div id="filters"></div>
     <button id="refine-toggle" aria-controls="refine" aria-expanded="false">Filters</button>
     <input type="search" id="find" placeholder="Find by name, creator or subject" aria-label="Find pictures">
-    <button id="choose">Select for a playlist</button>
+    <button id="choose">Select</button>
   </div>
   <div id="refine" hidden>
     <fieldset id="refine-status"><legend>Status</legend></fieldset>
@@ -131,6 +131,7 @@
     <span id="chosen-count"></span>
     <select id="to" aria-label="Playlist"></select>
     <button id="add-chosen" class="primary">Add to playlist</button>
+    <button id="edit-chosen">Edit one by one</button>
     <span class="hint">Tap pictures to select them.</span>
     <span class="spacer"></span>
     <button id="choose-done">Done</button>
@@ -286,7 +287,7 @@ function editLink(picture) {
   const a = document.createElement('a');
   a.className = 'nav-link';
   a.textContent = 'Edit';
-  a.href = '/editor?' + new URLSearchParams({ source: picture.file, name: picture.name });
+  a.href = `/editor?ids=${picture.id}`;
   return a;
 }
 
@@ -348,7 +349,7 @@ function card(picture) {
   const full = document.createElement('a');
   full.href = `/api/library/${picture.id}/file`;
   full.target = '_blank';
-  full.title = choosing ? 'Select for the playlist' : 'Look at the picture and its details';
+  full.title = choosing ? 'Select' : 'Look at the picture and its details';
   full.onclick = e => {
     if (e.ctrlKey || e.metaKey || e.shiftKey) return;
     e.preventDefault();
@@ -387,8 +388,8 @@ function card(picture) {
   } else if (picture.status === 'ready') {
     actions.append(button('Send to TV', () => send(picture), 'primary'));
   }
-  // A result is edited again from its original, which comes with the next change to the editor.
-  if (picture.kind === 'original' || picture.building_block) actions.append(editLink(picture));
+  // A result opens with the originals and crops it was made from.
+  actions.append(editLink(picture));
 
   const more = document.createElement('div');
   more.className = 'more';
@@ -630,12 +631,9 @@ function remove(picture) {
   });
 }
 
+// Building blocks can be chosen too, to be edited. A playlist leaves them out and says so.
 function choose(picture) {
   if (busy) return;
-  if (picture.building_block) {
-    say(`${picture.name} is a building block. Edit it for the screen first, then add the result.`, true);
-    return;
-  }
   say('');
   if (!chosen.delete(picture.id)) chosen.add(picture.id);
   render();
@@ -697,6 +695,14 @@ function addChosen() {
 $('choose').onclick = () => setChoosing(true);
 $('choose-done').onclick = () => setChoosing(false);
 $('add-chosen').onclick = addChosen;
+// Open the chosen pictures in the editor, one after another, in the order they were chosen.
+$('edit-chosen').onclick = () => {
+  if (!chosen.size) {
+    say('Tap the pictures to edit first.', true);
+    return;
+  }
+  location.href = `/editor?ids=${[...chosen].slice(0, 100).join(',')}`;
+};
 
 // Spaces and accented characters are encoded the way the address bar would, so the server can ask for them.
 function encodedLink(url) {
