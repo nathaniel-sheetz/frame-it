@@ -181,9 +181,8 @@ const VIEWS = [
     has: p => !p.used_in && (untagged(p, 'creators') || untagged(p, 'subjects')),
     title: 'Pictures nothing has been made from that have no creator or no subject' },
 ];
-// The Filters menu narrows whichever view is chosen.
+// The Filters menu, used instead of a view: a picture with any ticked status, and every ticked "only".
 const STATUSES = [
-  { key: 'any', text: 'Any', has: () => true },
   { key: 'on-tv', text: 'On TV', has: p => p.status === 'on-tv' },
   { key: 'ready', text: 'Ready', has: p => p.status === 'ready' },
   { key: 'blocks', text: 'Building blocks', has: p => p.building_block },
@@ -203,29 +202,30 @@ const chosen = new Set();
 // Kept in the address, so a reload or a bookmark comes back to the same filters.
 let shown = readHash();
 
+// Either a view is chosen, or the Filters menu has something ticked and `view` is null.
 function readHash() {
   const params = new URLSearchParams(location.hash.slice(1));
   // Older addresses were just the status: #on-tv, #ready or #blocks.
-  const old = STATUSES.find(s => params.has(s.key));
-  return {
-    view: VIEWS.find(v => v.key === params.get('view')) || VIEWS[0],
-    status: old || STATUSES.find(s => s.key === params.get('status')) || STATUSES[0],
-    only: new Set(ONLY.filter(o => params.getAll('only').includes(o.key))),
-  };
+  const statuses = new Set(STATUSES.filter(s => params.has(s.key) || params.getAll('status').includes(s.key)));
+  const only = new Set(ONLY.filter(o => params.getAll('only').includes(o.key)));
+  const view = statuses.size || only.size ? null : VIEWS.find(v => v.key === params.get('view')) || VIEWS[0];
+  return { view, statuses, only };
 }
 
-function setFilters(changes) {
-  shown = { ...shown, ...changes };
+function setFilters(view, statuses = new Set(), only = new Set()) {
+  // Unticking the last box in the menu goes back to All.
+  shown = { view: statuses.size || only.size ? null : view || VIEWS[0], statuses, only };
   const params = new URLSearchParams();
-  if (shown.view !== VIEWS[0]) params.set('view', shown.view.key);
-  if (shown.status !== STATUSES[0]) params.set('status', shown.status.key);
-  for (const o of ONLY) if (shown.only.has(o)) params.append('only', o.key);
+  if (shown.view && shown.view !== VIEWS[0]) params.set('view', shown.view.key);
+  for (const s of STATUSES) if (statuses.has(s)) params.append('status', s.key);
+  for (const o of ONLY) if (only.has(o)) params.append('only', o.key);
   const hash = params.toString();
   history.replaceState(null, '', hash ? `#${hash}` : location.pathname + location.search);
   render();
 }
 
-const refined = picture => shown.status.has(picture) && [...shown.only].every(o => o.has(picture));
+const refined = picture => (!shown.statuses.size || [...shown.statuses].some(s => s.has(picture)))
+  && [...shown.only].every(o => o.has(picture));
 
 function say(text, isError = false) {
   msg.textContent = text;
@@ -305,23 +305,23 @@ function label(text, className) {
 }
 
 function render() {
-  // The numbers on the views count what the search box and the Filters menu leave.
-  const found = data.items.filter(p => matches(p) && refined(p));
+  // The numbers on the views count what the search box leaves.
+  const found = data.items.filter(matches);
   $('filters').replaceChildren(...VIEWS.map(v => {
-    const b = button(v.text, () => setFilters({ view: v }), v === shown.view ? 'chosen' : '');
+    const b = button(v.text, () => setFilters(v), v === shown.view ? 'chosen' : '');
     if (v.title) b.title = v.title;
     b.append(count(found.filter(v.has).length));
     return b;
   }));
-  const active = (shown.status !== STATUSES[0]) + shown.only.size;
+  const active = shown.statuses.size + shown.only.size;
   const toggle = $('refine-toggle');
   toggle.replaceChildren('Filters', ...(active ? [count(active)] : []));
   toggle.classList.toggle('chosen', active > 0);
-  document.querySelectorAll('#refine input').forEach(input => {
-    input.checked = input.name === 'status' ? input.value === shown.status.key : shown.only.has(ONLY.find(o => o.key === input.value));
-  });
+  for (const [list, ticked] of [[STATUSES, shown.statuses], [ONLY, shown.only]]) {
+    for (const item of list) item.input.checked = ticked.has(item);
+  }
 
-  const pictures = found.filter(shown.view.has);
+  const pictures = found.filter(shown.view ? shown.view.has : refined);
   grid.replaceChildren();
   grid.classList.toggle('choosing', choosing);
   $('chosen-count').textContent = `${chosen.size} selected`;
@@ -547,25 +547,23 @@ viewer.onclick = e => { if (e.target === viewer && pressed === viewer) viewer.cl
 find.oninput = render;
 
 // The Filters menu is made once, so ticking a box keeps the focus on it.
-function option(type, name, item, onchange) {
+function option(item, field) {
   const el = document.createElement('label');
-  const input = document.createElement('input');
-  input.type = type;
-  input.name = name;
-  input.value = item.key;
-  input.onchange = onchange;
+  const input = item.input = document.createElement('input');
+  input.type = 'checkbox';
+  input.onchange = () => {
+    const next = { statuses: new Set(shown.statuses), only: new Set(shown.only) };
+    if (input.checked) next[field].add(item); else next[field].delete(item);
+    setFilters(null, next.statuses, next.only);
+  };
   el.append(input, item.text);
   if (item.title) el.title = item.title;
   return el;
 }
-$('refine-status').append(...STATUSES.map(s => option('radio', 'status', s, () => setFilters({ status: s }))));
-$('refine-only').append(...ONLY.map(o => option('checkbox', 'only', o, e => {
-  const next = new Set(shown.only);
-  if (e.target.checked) next.add(o); else next.delete(o);
-  setFilters({ only: next });
-})));
+$('refine-status').append(...STATUSES.map(s => option(s, 'statuses')));
+$('refine-only').append(...ONLY.map(o => option(o, 'only')));
 window.onhashchange = () => { shown = readHash(); render(); };
-$('refine-clear').onclick =() => setFilters({ status: STATUSES[0], only: new Set() });
+$('refine-clear').onclick = () => setFilters(VIEWS[0]);
 $('refine-toggle').onclick = () => {
   const open = $('refine').hidden;
   $('refine').hidden = !open;

@@ -13,9 +13,10 @@ Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
   On TV + ready, Blocks to use (building blocks not yet made into anything on
   the TV or ready) and Missing details (pictures nothing has been made from
   that have no creator or no subject).
-- The status filters moved to a Filters menu, with toggles for No creator, No
-  subject and No children. The menu narrows whichever view is chosen. Older
-  addresses such as `/library#ready` still open on that status.
+- The status filters moved to a Filters menu, used instead of a view. More
+  than one status can be ticked, along with No creator, No subject and No
+  children. Older addresses such as `/library#ready` still open on that
+  status.
 
 ### Added
 

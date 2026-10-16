@@ -64,9 +64,11 @@ The library page opens on one of four views:
 | Blocks to use | Building blocks nothing on the TV or ready has been made from yet, however many steps on |
 | Missing details | Pictures nothing has been made from that have no creator or no subject |
 
-The **Filters** button opens a menu that narrows whichever view is chosen: a
-status (On TV, Ready or Building blocks) and any of *No creator*, *No subject*
-and *No children* (nothing has been made from it). A result counts as having
+The **Filters** button opens a menu to use instead of a view. Tick any of the
+statuses On TV, Ready and Building blocks to show pictures with any of them,
+and any of *No creator*, *No subject* and *No children* (nothing has been made
+from it) to show only pictures with all of those. Choosing a view clears the
+menu, and clearing the menu goes back to All. A result counts as having
 the creators and subjects of the originals it was made from. The view and the
 menu are kept in the address, so a reload or a bookmark comes back to them.
 
