@@ -32,7 +32,7 @@ The library keeps pictures on the computer running the app, in `data/library/`
   settings. Results that were processed but neither sent nor saved are removed
   after 24 hours.
 
-Each picture carries one of these labels, and the page filters by them:
+Each picture carries one of these labels:
 
 | Label | Meaning |
 | --- | --- |
@@ -55,7 +55,24 @@ Tap a picture on the library page to look at it and to change its details:
 - A result also shows the creators and subjects of the originals it was made
   from, with a dashed outline. Those are changed on the original.
 
-The box beside the filters finds pictures by name, creator or subject.
+The library page opens on one of four views:
+
+| View | Shows |
+| --- | --- |
+| All | Every picture |
+| On TV + ready | Pictures labelled On TV or Ready |
+| Blocks to use | Building blocks nothing on the TV or ready has been made from yet, however many steps on |
+| Missing details | Pictures nothing has been made from that have no creator or no subject |
+
+The **Filters** button opens a menu to use instead of a view. Tick any of the
+statuses On TV, Ready and Building blocks to show pictures with any of them,
+and any of *No creator*, *No subject* and *No children* (nothing has been made
+from it) to show only pictures with all of those. Choosing a view clears the
+menu, and clearing the menu goes back to All. A result counts as having
+the creators and subjects of the originals it was made from. The view and the
+menu are kept in the address, so a reload or a bookmark comes back to them.
+
+The box beside the views finds pictures by name, creator or subject.
 
 Removing a picture from the TV, here or with the TV's remote, leaves it in the
 library. Pictures that were on the TV before the library existed show in the
@@ -209,7 +226,7 @@ The log is `~/Library/Logs/frame-tv.log`. To remove the service:
 | GET | `/api/editor/result/{name}` | The processed JPEG; add `?download=1&name=...` to download |
 | POST | `/api/editor/result/{name}/send` | Send the processed JPEG to the TV unchanged and keep it in the library (`show`, `name`) |
 | POST | `/api/editor/result/{name}/save` | Keep the processed JPEG in the library without sending it (`name`) |
-| GET | `/api/library` | Every library picture, the count under each filter, and disk use |
+| GET | `/api/library` | Every library picture, how many are on the TV, ready or building blocks, and disk use |
 | GET | `/api/library/{id}` | One picture, with its crop settings and originals. `from_originals` holds the creators and subjects it takes from them |
 | PATCH | `/api/library/{id}` | Change its `name`, `creators` or `subjects`. What is left out stays as it is |
 | GET | `/api/library/{id}/thumb`, `/view`, `/file` | Its preview, a larger one (up to 1600 px, made when first asked for), and the picture itself |

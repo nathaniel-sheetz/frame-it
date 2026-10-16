@@ -177,6 +177,59 @@ class TestResults:
         assert kept['parents'] == [{'id': None, 'file': None, 'name': None, 'crop': None}]
 
 
+class TestWorkedInto:
+    """Whether a picture has been made into something on the TV or ready, however many steps on."""
+
+    def worked_into(self, library, image):
+        one = library.get(image['id'])['worked_into']
+        assert next(i for i in library.list() if i['id'] == image['id'])['worked_into'] is one
+        return one
+
+    def test_a_block_nothing_is_made_from_is_not(self, library):
+        assert self.worked_into(library, original(library, 2400, 3600)) is False
+
+    def test_a_block_made_into_a_ready_picture_is(self, library):
+        block = original(library, 2400, 3600)
+        made = result(library, block)
+        assert self.worked_into(library, block) is True
+        assert self.worked_into(library, made) is False
+
+    def test_a_step_still_tagged_as_a_block_does_not_count_until_it_is_used(self, library):
+        block = original(library, 2400, 3600)
+        step = result(library, block)
+        library.tag(step['id'])
+        assert self.worked_into(library, block) is False
+        result(library, step, color='green')
+        assert self.worked_into(library, block) is True
+        assert self.worked_into(library, step) is True
+
+    def test_a_block_made_into_a_picture_on_the_tv_is(self, library):
+        block = original(library, 2400, 3600)
+        made = result(library, block)
+        library.tag(made['id'])
+        library.record_sent(made['id'], 'MY_F0001')
+        assert self.worked_into(library, block) is True
+
+    def test_a_copy_taken_off_the_tv_no_longer_counts(self, library):
+        block = original(library, 2400, 3600)
+        made = result(library, block)
+        library.tag(made['id'])
+        library.record_sent(made['id'], 'MY_F0001')
+        library.close_copy('MY_F0001')
+        assert self.worked_into(library, block) is False
+
+    def test_a_pair_counts_for_both_pictures(self, library):
+        left, right = original(library, 2400, 3600, 'red'), original(library, 2000, 3000, 'green')
+        result(library, left, right)
+        assert self.worked_into(library, left) is True
+        assert self.worked_into(library, right) is True
+
+    def test_a_parent_deleted_before_the_result_was_kept_is_skipped(self, library):
+        block = original(library, 2400, 3600)
+        library.keep_result(jpeg(3840, 2160, 'blue'), 'pair_4k.jpg', None, [('f' * 32, None), (block['id'], None)])
+        assert self.worked_into(library, block) is True
+
+
 class TestTVCopies:
     def test_a_sent_picture_is_on_the_tv(self, library):
         kept = result(library)
