@@ -84,6 +84,19 @@ SELECT m.image_id, d.kind, d.value FROM made_from m JOIN details d ON d.image_id
 ORDER BY d.rowid
 """
 
+# Pictures that something made from them, however many steps on, is on the TV or ready.
+# Only results have parents, and a result is on the TV, else a building block if tagged, else ready.
+_WORKED_INTO = """
+WITH RECURSIVE made_into(image_id, descendant) AS (
+    SELECT parent_id, image_id FROM parents WHERE parent_id IS NOT NULL{only}
+    UNION
+    SELECT m.image_id, p.image_id FROM made_into m JOIN parents p ON p.parent_id = m.descendant
+)
+SELECT DISTINCT m.image_id FROM made_into m
+WHERE EXISTS (SELECT 1 FROM tv_copies c WHERE c.image_id = m.descendant AND c.removed_at IS NULL)
+   OR NOT EXISTS (SELECT 1 FROM tags t WHERE t.image_id = m.descendant AND t.tag = ?)
+"""
+
 # Only a picture's extension counts as one: "v1.2" and "Screenshot 10.30.45" have none.
 _EXTENSION = re.compile(r"\.(jpe?g|png|webp|bmp)$", re.IGNORECASE)
 
@@ -251,7 +264,17 @@ class Library:
             inherited.setdefault(r["image_id"], {}).setdefault(r["kind"], []).append(r["value"])
         return own, inherited
 
-    def _describe(self, row, tags: set, copies: list[str], used_in: int, own: dict, inherited: dict) -> dict:
+    def _worked_into(self, db, image_id: str | None = None) -> set[str]:
+        """The pictures that have been made into something on the TV or ready, however many steps on.
+
+        For one picture when `image_id` is given, otherwise for all of them.
+        """
+        only = (image_id,) if image_id else ()
+        query = _WORKED_INTO.format(only=" AND parent_id = ?" if image_id else "")
+        return {r["image_id"] for r in db.execute(query, (*only, BUILDING_BLOCK))}
+
+    def _describe(self, row, tags: set, copies: list[str], used_in: int, own: dict, inherited: dict,
+                  worked_into: bool) -> dict:
         tagged = BUILDING_BLOCK in tags
         details = {"from_originals": {}}
         for kind, field in DETAILS.items():
@@ -281,6 +304,7 @@ class Library:
             "building_block": tagged,
             "tv": copies,
             "used_in": used_in,
+            "worked_into": worked_into,
             **details,
         }
 
@@ -293,7 +317,8 @@ class Library:
             "SELECT content_id FROM tv_copies WHERE image_id = ? AND removed_at IS NULL ORDER BY id", (image_id,))]
         used_in = db.execute("SELECT COUNT(*) FROM parents WHERE parent_id = ?", (image_id,)).fetchone()[0]
         own, inherited = self._details(db, image_id)
-        image = self._describe(row, tags, copies, used_in, own.get(image_id, {}), inherited.get(image_id, {}))
+        image = self._describe(row, tags, copies, used_in, own.get(image_id, {}), inherited.get(image_id, {}),
+                               image_id in self._worked_into(db, image_id))
         image["recipe"] = json.loads(row["recipe"]) if row["recipe"] else None
         image["parents"] = [
             {
@@ -324,9 +349,10 @@ class Library:
             for r in db.execute("SELECT parent_id, COUNT(*) AS n FROM parents WHERE parent_id IS NOT NULL GROUP BY parent_id"):
                 used_in[r["parent_id"]] = r["n"]
             own, inherited = self._details(db)
+            worked_into = self._worked_into(db)
             return [
                 self._describe(row, tags.get(row["id"], set()), copies.get(row["id"], []), used_in.get(row["id"], 0),
-                               own.get(row["id"], {}), inherited.get(row["id"], {}))
+                               own.get(row["id"], {}), inherited.get(row["id"], {}), row["id"] in worked_into)
                 for row in db.execute("SELECT * FROM images ORDER BY added_at DESC, rowid DESC")
             ]
 

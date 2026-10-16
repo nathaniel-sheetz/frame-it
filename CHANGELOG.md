@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 
+## [Unreleased]
+
+### Changed
+
+- The library page's filter buttons are now the views picked most often: All,
+  On TV + ready, Blocks to use (building blocks not yet made into anything on
+  the TV or ready) and Missing details (pictures nothing has been made from
+  that have no creator or no subject).
+- The status filters moved to a Filters menu, with toggles for No creator, No
+  subject and No children. The menu narrows whichever view is chosen. Older
+  addresses such as `/library#ready` still open on that status.
+
+### Added
+
+- Each library picture says whether it has been worked into something on the
+  TV or ready, however many steps on (`worked_into`).
+
 ## [0.4.0.0] - 2026-10-14
 
 ### Added

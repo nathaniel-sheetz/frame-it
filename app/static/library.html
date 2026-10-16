@@ -9,7 +9,18 @@
   #bar { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 16px; }
   #filters { display: flex; flex-wrap: wrap; gap: 8px; }
   #filters button.chosen { border-color: var(--accent); color: var(--accent); }
-  #filters .n { color: var(--muted); margin-left: 4px; }
+  #filters .n, #refine-toggle .n { color: var(--muted); margin-left: 4px; }
+  #refine-toggle.chosen { border-color: var(--accent); color: var(--accent); }
+  #refine {
+    display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 32px; margin-bottom: 16px; padding: 10px 12px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  }
+  #refine[hidden] { display: none; }
+  #refine fieldset { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 0; border: 0; }
+  #refine legend { width: 100%; padding: 0 0 2px; font-size: 12px; color: var(--muted); }
+  #refine label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  #refine input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+  #refine .link { align-self: flex-end; color: var(--muted); font-size: 13px; }
   #find { flex: 1; min-width: 220px; max-width: 420px; }
   #choosing {
     display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 16px; padding: 10px 12px;
@@ -107,8 +118,14 @@
   </div>
   <div id="bar">
     <div id="filters"></div>
+    <button id="refine-toggle" aria-controls="refine" aria-expanded="false">Filters</button>
     <input type="search" id="find" placeholder="Find by name, creator or subject" aria-label="Find pictures">
     <button id="choose">Select for a playlist</button>
+  </div>
+  <div id="refine" hidden>
+    <fieldset id="refine-status"><legend>Status</legend></fieldset>
+    <fieldset id="refine-only"><legend>Only pictures with</legend></fieldset>
+    <button type="button" id="refine-clear" class="link">Clear</button>
   </div>
   <div id="choosing" hidden>
     <span id="chosen-count"></span>
@@ -150,11 +167,31 @@ const grid = $('grid'), msg = $('msg');
 
 const viewer = $('viewer'), find = $('find');
 
-const FILTERS = [
+// A picture's creators or subjects: its own, then those of what it was made from.
+const described = (picture, field) => [...picture[field], ...picture.from_originals[field]];
+const untagged = (picture, field) => !described(picture, field).length;
+
+// The views picked most often, one at a time.
+const VIEWS = [
   { key: 'all', text: 'All', has: () => true },
+  { key: 'showing', text: 'On TV + ready', has: p => p.status === 'on-tv' || p.status === 'ready' },
+  { key: 'unused-blocks', text: 'Blocks to use', has: p => p.building_block && !p.worked_into,
+    title: 'Building blocks not yet made into anything on the TV or ready' },
+  { key: 'untagged', text: 'Missing details',
+    has: p => !p.used_in && (untagged(p, 'creators') || untagged(p, 'subjects')),
+    title: 'Pictures nothing has been made from that have no creator or no subject' },
+];
+// The Filters menu narrows whichever view is chosen.
+const STATUSES = [
+  { key: 'any', text: 'Any', has: () => true },
   { key: 'on-tv', text: 'On TV', has: p => p.status === 'on-tv' },
   { key: 'ready', text: 'Ready', has: p => p.status === 'ready' },
   { key: 'blocks', text: 'Building blocks', has: p => p.building_block },
+];
+const ONLY = [
+  { key: 'no-creator', text: 'No creator', has: p => untagged(p, 'creators') },
+  { key: 'no-subject', text: 'No subject', has: p => untagged(p, 'subjects') },
+  { key: 'no-children', text: 'No children', has: p => !p.used_in, title: 'Nothing has been made from it yet' },
 ];
 const LABELS = { 'on-tv': 'On TV', ready: 'Ready', block: 'Building block', original: 'Original' };
 
@@ -163,8 +200,32 @@ let data = { items: [], count: 0 };
 // Picking pictures for a playlist: a tap selects a card instead of opening it.
 let choosing = false;
 const chosen = new Set();
-// Kept in the address, so a reload or a bookmark comes back to the same filter.
-let filter = FILTERS.find(f => f.key === location.hash.slice(1)) || FILTERS[0];
+// Kept in the address, so a reload or a bookmark comes back to the same filters.
+let shown = readHash();
+
+function readHash() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  // Older addresses were just the status: #on-tv, #ready or #blocks.
+  const old = STATUSES.find(s => params.has(s.key));
+  return {
+    view: VIEWS.find(v => v.key === params.get('view')) || VIEWS[0],
+    status: old || STATUSES.find(s => s.key === params.get('status')) || STATUSES[0],
+    only: new Set(ONLY.filter(o => params.getAll('only').includes(o.key))),
+  };
+}
+
+function setFilters(changes) {
+  shown = { ...shown, ...changes };
+  const params = new URLSearchParams();
+  if (shown.view !== VIEWS[0]) params.set('view', shown.view.key);
+  if (shown.status !== STATUSES[0]) params.set('status', shown.status.key);
+  for (const o of ONLY) if (shown.only.has(o)) params.append('only', o.key);
+  const hash = params.toString();
+  history.replaceState(null, '', hash ? `#${hash}` : location.pathname + location.search);
+  render();
+}
+
+const refined = picture => shown.status.has(picture) && [...shown.only].every(o => o.has(picture));
 
 function say(text, isError = false) {
   msg.textContent = text;
@@ -191,9 +252,6 @@ function size(bytes) {
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-// A picture's creators or subjects: its own, then those of what it was made from.
-const described = (picture, field) => [...picture[field], ...picture.from_originals[field]];
 
 // The part of a name that renaming leaves alone. The server uses the same rule.
 const extension = name => (name.match(/\.(jpe?g|png|webp|bmp)$/i) || [''])[0];
@@ -232,6 +290,13 @@ function editLink(picture) {
   return a;
 }
 
+function count(n) {
+  const span = document.createElement('span');
+  span.className = 'n';
+  span.textContent = n;
+  return span;
+}
+
 function label(text, className) {
   const span = document.createElement('span');
   span.className = `label ${className}`;
@@ -240,20 +305,23 @@ function label(text, className) {
 }
 
 function render() {
-  // The numbers on the filters count what the search box leaves.
-  const found = data.items.filter(matches);
-  const filters = $('filters');
-  filters.replaceChildren(...FILTERS.map(f => {
-    const b = button(f.text, () => { filter = f; history.replaceState(null, '', `#${f.key}`); render(); },
-      f === filter ? 'chosen' : '');
-    const n = document.createElement('span');
-    n.className = 'n';
-    n.textContent = found.filter(f.has).length;
-    b.append(n);
+  // The numbers on the views count what the search box and the Filters menu leave.
+  const found = data.items.filter(p => matches(p) && refined(p));
+  $('filters').replaceChildren(...VIEWS.map(v => {
+    const b = button(v.text, () => setFilters({ view: v }), v === shown.view ? 'chosen' : '');
+    if (v.title) b.title = v.title;
+    b.append(count(found.filter(v.has).length));
     return b;
   }));
+  const active = (shown.status !== STATUSES[0]) + shown.only.size;
+  const toggle = $('refine-toggle');
+  toggle.replaceChildren('Filters', ...(active ? [count(active)] : []));
+  toggle.classList.toggle('chosen', active > 0);
+  document.querySelectorAll('#refine input').forEach(input => {
+    input.checked = input.name === 'status' ? input.value === shown.status.key : shown.only.has(ONLY.find(o => o.key === input.value));
+  });
 
-  const pictures = found.filter(filter.has);
+  const pictures = found.filter(shown.view.has);
   grid.replaceChildren();
   grid.classList.toggle('choosing', choosing);
   $('chosen-count').textContent = `${chosen.size} selected`;
@@ -262,7 +330,7 @@ function render() {
     empty.className = 'empty';
     empty.textContent = !data.count
       ? 'Nothing in the library yet. Every picture you add here, in the gallery or in the editor is kept.'
-      : found.length < data.count ? 'No pictures match that under this filter.' : 'No pictures under this filter.';
+      : find.value.trim() ? 'No pictures match that under these filters.' : 'No pictures under these filters.';
     grid.append(empty);
     return;
   }
@@ -477,6 +545,32 @@ let pressed = null;
 viewer.onpointerdown = e => { pressed = e.target; };
 viewer.onclick = e => { if (e.target === viewer && pressed === viewer) viewer.close(); };
 find.oninput = render;
+
+// The Filters menu is made once, so ticking a box keeps the focus on it.
+function option(type, name, item, onchange) {
+  const el = document.createElement('label');
+  const input = document.createElement('input');
+  input.type = type;
+  input.name = name;
+  input.value = item.key;
+  input.onchange = onchange;
+  el.append(input, item.text);
+  if (item.title) el.title = item.title;
+  return el;
+}
+$('refine-status').append(...STATUSES.map(s => option('radio', 'status', s, () => setFilters({ status: s }))));
+$('refine-only').append(...ONLY.map(o => option('checkbox', 'only', o, e => {
+  const next = new Set(shown.only);
+  if (e.target.checked) next.add(o); else next.delete(o);
+  setFilters({ only: next });
+})));
+window.onhashchange = () => { shown = readHash(); render(); };
+$('refine-clear').onclick =() => setFilters({ status: STATUSES[0], only: new Set() });
+$('refine-toggle').onclick = () => {
+  const open = $('refine').hidden;
+  $('refine').hidden = !open;
+  $('refine-toggle').setAttribute('aria-expanded', open);
+};
 
 async function run(label, fn) {
   if (busy) return;

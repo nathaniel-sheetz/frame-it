@@ -32,7 +32,7 @@ The library keeps pictures on the computer running the app, in `data/library/`
   settings. Results that were processed but neither sent nor saved are removed
   after 24 hours.
 
-Each picture carries one of these labels, and the page filters by them:
+Each picture carries one of these labels:
 
 | Label | Meaning |
 | --- | --- |
@@ -55,7 +55,22 @@ Tap a picture on the library page to look at it and to change its details:
 - A result also shows the creators and subjects of the originals it was made
   from, with a dashed outline. Those are changed on the original.
 
-The box beside the filters finds pictures by name, creator or subject.
+The library page opens on one of four views:
+
+| View | Shows |
+| --- | --- |
+| All | Every picture |
+| On TV + ready | Pictures labelled On TV or Ready |
+| Blocks to use | Building blocks nothing on the TV or ready has been made from yet, however many steps on |
+| Missing details | Pictures nothing has been made from that have no creator or no subject |
+
+The **Filters** button opens a menu that narrows whichever view is chosen: a
+status (On TV, Ready or Building blocks) and any of *No creator*, *No subject*
+and *No children* (nothing has been made from it). A result counts as having
+the creators and subjects of the originals it was made from. The view and the
+menu are kept in the address, so a reload or a bookmark comes back to them.
+
+The box beside the views finds pictures by name, creator or subject.
 
 Removing a picture from the TV, here or with the TV's remote, leaves it in the
 library. Pictures that were on the TV before the library existed show in the
