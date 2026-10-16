@@ -448,7 +448,7 @@ class Library:
 
 
 def summary(images: list[dict]) -> dict:
-    """How many pictures there are, under each filter, and the disk space they take."""
+    """How many pictures there are, how many are on the TV, ready or building blocks, and the disk space they take."""
     return {
         "count": len(images),
         "bytes": sum(image["bytes"] for image in images),

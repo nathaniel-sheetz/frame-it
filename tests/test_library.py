@@ -210,6 +210,25 @@ class TestWorkedInto:
         library.record_sent(made['id'], 'MY_F0001')
         assert self.worked_into(library, block) is True
 
+    def test_a_copy_taken_off_the_tv_no_longer_counts(self, library):
+        block = original(library, 2400, 3600)
+        made = result(library, block)
+        library.tag(made['id'])
+        library.record_sent(made['id'], 'MY_F0001')
+        library.close_copy('MY_F0001')
+        assert self.worked_into(library, block) is False
+
+    def test_a_pair_counts_for_both_pictures(self, library):
+        left, right = original(library, 2400, 3600, 'red'), original(library, 2000, 3000, 'green')
+        result(library, left, right)
+        assert self.worked_into(library, left) is True
+        assert self.worked_into(library, right) is True
+
+    def test_a_parent_deleted_before_the_result_was_kept_is_skipped(self, library):
+        block = original(library, 2400, 3600)
+        library.keep_result(jpeg(3840, 2160, 'blue'), 'pair_4k.jpg', None, [('f' * 32, None), (block['id'], None)])
+        assert self.worked_into(library, block) is True
+
 
 class TestTVCopies:
     def test_a_sent_picture_is_on_the_tv(self, library):

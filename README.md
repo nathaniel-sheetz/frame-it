@@ -226,7 +226,7 @@ The log is `~/Library/Logs/frame-tv.log`. To remove the service:
 | GET | `/api/editor/result/{name}` | The processed JPEG; add `?download=1&name=...` to download |
 | POST | `/api/editor/result/{name}/send` | Send the processed JPEG to the TV unchanged and keep it in the library (`show`, `name`) |
 | POST | `/api/editor/result/{name}/save` | Keep the processed JPEG in the library without sending it (`name`) |
-| GET | `/api/library` | Every library picture, the count under each filter, and disk use |
+| GET | `/api/library` | Every library picture, how many are on the TV, ready or building blocks, and disk use |
 | GET | `/api/library/{id}` | One picture, with its crop settings and originals. `from_originals` holds the creators and subjects it takes from them |
 | PATCH | `/api/library/{id}` | Change its `name`, `creators` or `subjects`. What is left out stays as it is |
 | GET | `/api/library/{id}/thumb`, `/view`, `/file` | Its preview, a larger one (up to 1600 px, made when first asked for), and the picture itself |

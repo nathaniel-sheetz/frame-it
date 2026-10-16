@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 
-## [Unreleased]
+## [0.5.0.0] - 2026-10-16
 
 ### Changed
 
@@ -16,7 +16,7 @@ Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 - The status filters moved to a Filters menu, used instead of a view. More
   than one status can be ticked, along with No creator, No subject and No
   children. Older addresses such as `/library#ready` still open on that
-  status.
+  status. A view, and what is ticked in the menu, are kept in the address.
 
 ### Added
 
