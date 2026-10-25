@@ -701,7 +701,12 @@ $('edit-chosen').onclick = () => {
     say('Tap the pictures to edit first.', true);
     return;
   }
-  location.href = `/editor?ids=${[...chosen].slice(0, 100).join(',')}`;
+  // The editor keeps this many. Leaving the rest out without saying so drops pictures.
+  if (chosen.size > 100) {
+    say('100 is the most that can be edited at once. Deselect some first.', true);
+    return;
+  }
+  location.href = `/editor?ids=${[...chosen].join(',')}`;
 };
 
 // Spaces and accented characters are encoded the way the address bar would, so the server can ask for them.

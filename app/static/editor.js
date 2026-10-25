@@ -116,7 +116,9 @@ async function start() {
 
     const ids = (new URLSearchParams(window.location.search).get('ids') || '')
         .split(',').filter(id => /^[0-9a-f]{32}$/.test(id));
-    batch.ids = [...new Set(ids)].slice(0, MAX_BATCH);
+    const unique = [...new Set(ids)];
+    const cut = unique.length > MAX_BATCH;
+    batch.ids = unique.slice(0, MAX_BATCH);
 
     try {
         await loadLibrary();
@@ -138,7 +140,21 @@ async function start() {
         }
     }
     const at = parseInt(window.location.hash.slice(1), 10) - 1;
-    openAt(at >= 0 && at < batch.ids.length ? at : Math.max(0, nextOpen(-1)));
+    if (at >= 0 && at < batch.ids.length) {
+        openAt(at);
+    } else {
+        const next = nextOpen(-1);
+        // A finished batch has no picture in the address. Opening the first one
+        // would look like the marks had been forgotten.
+        if (batch.ids.length > 1 && next < 0) {
+            showBatchDone();
+        } else {
+            openAt(Math.max(0, next));
+        }
+    }
+    if (cut) {
+        showBatchStatus(`The first ${MAX_BATCH} pictures are open. The rest were left out.`, 'error');
+    }
 }
 
 // Opened without a picture: choose one from the library, or add one.
@@ -274,6 +290,10 @@ function clearEditor() {
     showSendStatus('', '');
     $('show-toggle').checked = false;
     showPageStatus('', '');
+    // A result that finishes loading after the next picture opens must not reveal itself there.
+    const resultImage = $('result-image');
+    resultImage.onload = null;
+    resultImage.removeAttribute('src');
 }
 
 // Layout: fill the screen, keep the whole picture with bars, or pair it with another.
@@ -542,8 +562,17 @@ function initializeCropper2() {
         if (token !== secondShown) {
             return;
         }
+        // Read here, not before the image loads, so a gap or first crop changed
+        // while it was loading is the shape the second picture gets.
+        const ratioNow = computeImage2Ratio();
+        if (ratioNow === null) {
+            $('diptych-crop-warning').textContent = 'The first crop is too wide: there is no room for a second picture.';
+            $('diptych-crop-warning').hidden = false;
+        } else {
+            $('diptych-crop-warning').hidden = true;
+        }
         state.cropper2 = new Cropper(cropImage2, {
-            aspectRatio: ratio2 !== null && ratio2 > 0 ? ratio2 : 1,
+            aspectRatio: ratioNow !== null && ratioNow > 0 ? ratioNow : 1,
             viewMode: 1,
             dragMode: 'move',
             autoCropArea: 1,
@@ -933,7 +962,11 @@ function showResult(data) {
     showProcessStatus('Processing complete!', 'success');
 
     const resultImage = $('result-image');
+    const token = opening;
     resultImage.onload = function() {
+        if (token !== opening) {
+            return;
+        }
         $('download-section').hidden = false;
         $('download-section').scrollIntoView({ behavior: 'smooth' });
     };
@@ -968,13 +1001,14 @@ async function loadPlaylists() {
 }
 
 // Keep the result in the library. Returns what the library calls it.
-async function keep() {
-    const response = await fetch(`${state.resultUrl}/save`, {
+// `url` and `name` are the ones from the click: the page may have moved on since.
+async function keep(url, name) {
+    const response = await fetch(`${url}/save`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ name: keptName() })
+        body: JSON.stringify({ name })
     });
     const data = await readJson(response);
     if (!response.ok) {
@@ -1016,6 +1050,9 @@ async function sendToTV() {
         return;
     }
 
+    const pending = pendingResult();
+    const name = keptName();
+    const show = $('show-toggle').checked;
     const sendBtn = $('send-btn');
     sendBtn.disabled = true;
     showSendStatus('Sending to the TV...', 'loading');
@@ -1023,13 +1060,13 @@ async function sendToTV() {
     try {
         // A playlist takes library pictures, and sending does not say which one this became.
         // Kept first, it is the same library picture when it is sent.
-        const kept = $('playlist-select').value ? await keep() : null;
-        const response = await fetch(`${state.resultUrl}/send`, {
+        const kept = $('playlist-select').value ? await keep(pending.url, name) : null;
+        const response = await fetch(`${pending.url}/send`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ show: $('show-toggle').checked, name: keptName() })
+            body: JSON.stringify({ show, name })
         });
 
         const data = await readJson(response);
@@ -1037,24 +1074,24 @@ async function sendToTV() {
         if (response.ok) {
             // The button stays disabled so the same result is not sent twice.
             // Sending kept it in the library, so there is nothing left to save.
-            $('save-btn').disabled = true;
-            const added = kept ? await addToPlaylist(kept.id) : '';
-            if (data.warning) {
-                finished(data.warning + added, 'error');
-            } else if (data.shown) {
-                finished('Sent. It is on display now.' + added, 'success');
-            } else if (data.selected) {
-                finished('Sent and selected. Art Mode is off, so it was not put on screen.' + added, 'success');
-            } else {
-                finished('Sent to the TV.' + added, 'success');
+            if (pending.opening === opening) {
+                $('save-btn').disabled = true;
             }
-        } else {
+            const added = kept ? await addToPlaylist(kept.id) : '';
+            const message = data.warning ? data.warning + added
+                : data.shown ? 'Sent. It is on display now.' + added
+                : data.selected ? 'Sent and selected. Art Mode is off, so it was not put on screen.' + added
+                : 'Sent to the TV.' + added;
+            finished(message, data.warning ? 'error' : 'success', pending);
+        } else if (pending.opening === opening) {
             showSendStatus(errorText(data, 'Send failed'), 'error');
             sendBtn.disabled = false;
         }
     } catch (error) {
-        showSendStatus('Send failed: ' + error.message, 'error');
-        sendBtn.disabled = false;
+        if (pending.opening === opening) {
+            showSendStatus('Send failed: ' + error.message, 'error');
+            sendBtn.disabled = false;
+        }
     }
 }
 
@@ -1064,15 +1101,19 @@ async function saveToLibrary() {
         return;
     }
 
+    const pending = pendingResult();
+    const name = keptName();
     $('save-btn').disabled = true;
     showSendStatus('Saving...', 'loading');
 
     try {
-        const data = await keep();
-        finished(`Saved to the library as ${data.name}.` + await addToPlaylist(data.id), 'success');
+        const data = await keep(pending.url, name);
+        finished(`Saved to the library as ${data.name}.` + await addToPlaylist(data.id), 'success', pending);
     } catch (error) {
-        showSendStatus(error.message, 'error');
-        $('save-btn').disabled = false;
+        if (pending.opening === opening) {
+            showSendStatus(error.message, 'error');
+            $('save-btn').disabled = false;
+        }
     }
 }
 
@@ -1081,19 +1122,36 @@ function showSendStatus(message, type) {
     $('send-status').textContent = message;
 }
 
-// A picture is sent or saved. In a batch, that one is done and the next one opens.
-function finished(message, type) {
-    showSendStatus(message, type);
-    if (batch.ids.length < 2) {
+// The picture a send or save belongs to, taken before the request. Leaving that
+// picture while it runs must not mark whichever one is open when the reply comes.
+function pendingResult() {
+    const id = batch.ids.length > 1 && batch.at >= 0 ? batch.ids[batch.at] : null;
+    const partnerId = id && state.layout === 'pair' && state.second && state.second.id !== id
+        && batch.ids.includes(state.second.id) ? state.second.id : null;
+    return { url: state.resultUrl, opening, id, name: state.first ? state.first.name : '', partnerId };
+}
+
+// A picture is sent or saved. In a batch, that one is done and, if it is still
+// the picture on screen, the next one opens.
+function finished(message, type, pending) {
+    const here = pending.opening === opening;
+    if (here) {
+        showSendStatus(message, type);
+    }
+    if (!pending.id) {
         return;
     }
-    const id = batch.ids[batch.at];
-    batch.marks.set(id, 'done');
+    batch.marks.set(pending.id, 'done');
     // A partner from the same batch has been used, so it is not offered again as the next one.
-    if (state.layout === 'pair' && state.second && state.second.id !== id && batch.ids.includes(state.second.id)) {
-        batch.marks.set(state.second.id, 'partner');
+    // One already sent or saved stays counted as made.
+    if (pending.partnerId && batch.marks.get(pending.partnerId) !== 'done') {
+        batch.marks.set(pending.partnerId, 'partner');
     }
-    showBatchStatus(`${state.first.name}: ${message}`, type);
+    renderBatch();
+    if (!here) {
+        return;
+    }
+    showBatchStatus(`${pending.name}: ${message}`, type);
     advance();
 }
 
@@ -1160,7 +1218,11 @@ function advance() {
         openAt(next);
         return;
     }
-    // Every picture has been dealt with.
+    showBatchDone();
+}
+
+// Every picture has been dealt with. Also how a finished batch comes back on reload.
+function showBatchDone() {
     opening++;
     clearEditor();
     batch.at = -1;
@@ -1207,7 +1269,7 @@ function renderBatch() {
     } else {
         const counts = { made: 0, skipped: 0 };
         for (const mark of batch.marks.values()) {
-            if (mark === 'done') counts.made++;
+            if (mark === 'done' || mark === 'partner') counts.made++;
             if (mark === 'skipped') counts.skipped++;
         }
         $('queue-position').textContent = `All done: ${counts.made} made, ${counts.skipped} skipped`;
