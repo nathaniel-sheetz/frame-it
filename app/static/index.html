@@ -214,7 +214,7 @@ function showStaged(source) {
   }
   $('staged-img').src = source.url;
   $('staged-name').textContent = `${source.original_filename} · ${source.width}×${source.height}`;
-  $('fit').href = '/editor?' + new URLSearchParams({ source: source.filename, name: source.original_filename });
+  $('fit').href = `/editor?ids=${source.id}`;
 }
 
 // Staging only talks to this server, so unlike run() it does not reload the gallery from the TV.

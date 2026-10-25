@@ -25,6 +25,9 @@ MAX_AGE_SECONDS = 24 * 60 * 60
 # The longest name a picture can be given. Names made here stay within it.
 MAX_NAME = 200
 MAX_STEM = 80
+# How far the second crop of a pair may be from the shape of the space beside the
+# first. The second picture is stretched to fill that space, so more than this shows.
+PAIR_TOLERANCE = 0.02
 # Pillow reports multi-picture JPEGs (many phones and cameras) as MPO.
 FORMATS = {"JPEG": "jpg", "MPO": "jpg", "PNG": "png", "WEBP": "webp", "BMP": "bmp"}
 
@@ -185,6 +188,7 @@ def create_router(tv, library, processed_dir: Path, player=None) -> APIRouter:
             raise HTTPException(500, "The picture could not be saved to the library.")
         return {
             "success": True,
+            "id": image["id"],
             "filename": image["file"],
             "original_filename": image["name"],
             "width": image["width"],
@@ -244,10 +248,17 @@ def create_router(tv, library, processed_dir: Path, player=None) -> APIRouter:
     def process_diptych(req: DiptychRequest):
         size = target(req.preset)
         gap_percent = max(1.0, min(10.0, req.gap_percent))
+        first, second = source_path(req.filename1), source_path(req.filename2)
+        # The width left for the second picture. None left is refused below, with its own message.
+        room = (size["width"] - round(size["width"] * gap_percent / 100)
+                - round(req.crop1.width * size["height"] / req.crop1.height))
+        if room > 0 and abs(req.crop2.width / req.crop2.height * size["height"] / room - 1) > PAIR_TOLERANCE:
+            raise HTTPException(400, "The second crop no longer matches the space beside the first. "
+                                     "Refresh it and process again.")
         output = processed_dir / f"{uuid.uuid4().hex}.jpg"
         try:
             editor.crop_and_combine_diptych(
-                source_path(req.filename1), source_path(req.filename2), output,
+                first, second, output,
                 req.crop1.model_dump(), req.crop2.model_dump(),
                 size["width"], size["height"], gap_percent=gap_percent,
             )

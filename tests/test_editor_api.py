@@ -94,6 +94,8 @@ class TestUpload:
         assert data['original_filename'] == 'My Photo.jpg'
         assert (data['width'], data['height']) == (800, 600)
         assert (dirs[0] / data['filename']).is_file()
+        # The library id, which the editor is opened with.
+        assert data['filename'] == f"{data['id']}.jpg"
 
     def test_upload_type_comes_from_content_not_name(self, client):
         resp = upload(client, image_bytes(100, 100, fmt='PNG'), 'misnamed.jpg')
@@ -314,13 +316,29 @@ class TestDiptych:
     def body(self, client, **extra):
         a = upload(client, image_bytes(400, 900, 'red'), 'left.jpg').json()
         b = upload(client, image_bytes(500, 800, 'blue'), 'right.jpg').json()
+        # Crop 2 is the shape of the space image 1 (960px wide on the TV) and the gap leave.
+        gap = max(1, min(10, extra.get('gap_percent', 1)))
+        room = 3840 - round(3840 * gap / 100) - 960
         return {
             'filename1': a['filename'], 'filename2': b['filename'],
             'original_filename1': 'left.jpg', 'original_filename2': 'right.jpg',
             'crop1': {'x': 0, 'y': 0, 'width': 400, 'height': 900},
-            'crop2': {'x': 0, 'y': 0, 'width': 500, 'height': 800},
+            'crop2': {'x': 0, 'y': 0, 'width': 500, 'height': round(500 * 2160 / room)},
             **extra,
         }
+
+    def test_diptych_second_crop_of_the_wrong_shape_is_refused(self, client, dirs):
+        body = self.body(client)
+        body['crop2'] = {'x': 0, 'y': 0, 'width': 500, 'height': 800}
+        resp = client.post('/api/editor/process-diptych', json=body)
+        assert resp.status_code == 400
+        assert 'second crop' in resp.json()['detail']
+        assert not list(dirs[1].glob('*.jpg'))
+
+    def test_diptych_second_crop_a_pixel_off_is_accepted(self, client):
+        body = self.body(client)
+        body['crop2']['height'] += 1
+        assert client.post('/api/editor/process-diptych', json=body).status_code == 200
 
     def test_diptych_success(self, client, dirs):
         resp = client.post('/api/editor/process-diptych', json=self.body(client))

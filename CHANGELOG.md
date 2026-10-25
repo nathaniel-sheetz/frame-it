@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.6.0.0] - 2026-10-24
+
+### Added
+
+- The editor opens pictures already in the library: from Edit on a card, from
+  Custom fit in the gallery, or at `/editor`, which offers the library to pick
+  from.
+- Pair with another picture from the library. The pictures listed first lose
+  the least when cropped to the space beside the first, and each shows how much
+  of it is kept. A picture can also be added there from a file or a link.
+- Edit on a result opens the originals with the crops, layout and gap it was
+  made with. Saving or sending makes a new picture; the old one stays.
+- In the library, Select some pictures, then Edit one by one. The editor shows
+  the batch as a strip with Back and Skip, and opens the next after each save
+  or send. Pictures from the batch are offered first when pairing, and a
+  picture used as the second of a pair counts as done.
+
+### Changed
+
+- Select on the library is for editing as well as for a playlist. Building
+  blocks can be chosen to edit; a playlist still leaves them out.
+- A pair is refused when the second crop does not match the space beside the
+  first, instead of stretching that picture to fit.
+
+### Fixed
+
+- Sending or saving, then leaving that picture before it finishes, marks the
+  picture that was sent and leaves the one now open where it is.
+- A gap or first-crop change while the second picture is still loading is the
+  shape that picture gets.
+- Reloading a finished batch stays on the done screen.
+- The done line counts a picture used as the second of a pair. One already
+  saved stays counted as made.
+- Choosing more than 100 pictures stays on the library and says 100 is the
+  most that can be edited at once.
+- A result that finishes loading after the next picture opens does not show
+  up on that picture.
+
 ## [0.5.0.0] - 2026-10-16
 
 ### Changed

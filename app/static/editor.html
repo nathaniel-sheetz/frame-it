@@ -18,98 +18,73 @@
 
     <div class="container">
         <main>
-            <!-- Upload Section -->
-            <section id="upload-section" class="card">
-                <h2>Step 1: Choose a Picture</h2>
-                <div class="upload-area" id="upload-area">
-                    <input type="file" id="file-input" accept="image/*" hidden>
-                    <div class="upload-prompt">
-                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="17 8 12 3 7 8"></polyline>
-                            <line x1="12" y1="3" x2="12" y2="15"></line>
-                        </svg>
-                        <p>Click to upload or drag and drop</p>
-                        <span class="file-types">PNG, JPG, JPEG, WEBP, BMP (max 50MB)</span>
-                    </div>
+            <!-- Editing several pictures one after another -->
+            <section id="queue-section" class="card" hidden>
+                <div class="queue-head">
+                    <h2 id="queue-position"></h2>
+                    <span class="spacer"></span>
+                    <button id="queue-back" class="btn btn-secondary btn-sm">Back</button>
+                    <button id="queue-skip" class="btn btn-secondary btn-sm">Skip</button>
                 </div>
-                <form class="link-row" id="link-form">
-                    <input type="url" id="link-input" class="link-input" placeholder="or paste a picture link" aria-label="Picture link" required>
-                    <button class="btn btn-secondary btn-sm">Fetch</button>
-                </form>
-                <div id="upload-status"></div>
+                <div class="queue-strip" id="queue-strip"></div>
+                <div id="queue-status"></div>
+                <p id="queue-done" hidden>Every picture in this batch has been dealt with. Pick one above to change it, or go <a href="/library">back to the library</a>.</p>
+            </section>
+
+            <div id="page-status"></div>
+
+            <!-- Opened without a picture -->
+            <section id="start-section" class="card" hidden>
+                <h2>Pick a picture to edit</h2>
+                <div id="start-picker"></div>
             </section>
 
             <!-- Crop Section -->
-            <section id="crop-section" class="card" style="display: none;">
-                <h2>Step 2: Crop for the Frame</h2>
-                <p class="instruction">Drag and resize the crop box to select the portion of your image. The result is 3840 × 2160.</p>
-                <div class="letterbox-toggle">
-                    <label class="toggle-label">
-                        <input type="checkbox" id="letterbox-toggle">
-                        <span class="toggle-text">Allow blank space (letterbox)</span>
-                    </label>
-                    <p class="toggle-hint" id="letterbox-hint" style="display: none;">
-                        Crop freely — black bars will be added to fill the frame.
-                    </p>
+            <section id="crop-section" class="card" hidden>
+                <h2 id="crop-title">Crop for the Frame</h2>
+                <div class="layout-choice" role="radiogroup" aria-label="Layout">
+                    <label><input type="radio" name="layout" value="fill" checked><span>Fill the screen</span></label>
+                    <label><input type="radio" name="layout" value="bars"><span>Whole picture with bars</span></label>
+                    <label><input type="radio" name="layout" value="pair"><span>Pair with another</span></label>
                 </div>
+                <p class="instruction" id="layout-hint"></p>
                 <div class="image-container">
-                    <img id="crop-image" src="" alt="Image to crop">
+                    <img id="crop-image" src="" alt="Picture to crop">
                 </div>
                 <div class="crop-info" id="crop-info"></div>
-                <div id="diptych-controls" style="display: none;">
-                    <button id="diptych-btn" class="btn btn-secondary">
-                        Add second image (side-by-side pair)
-                    </button>
-                </div>
             </section>
 
-            <!-- Diptych Upload Section (Step 2b) -->
-            <section id="diptych-upload-section" class="card" style="display: none;">
-                <h2>Step 2b: Choose the Second Picture</h2>
-                <div class="upload-area" id="upload-area-2">
-                    <input type="file" id="file-input-2" accept="image/*" hidden>
-                    <div class="upload-prompt">
-                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="17 8 12 3 7 8"></polyline>
-                            <line x1="12" y1="3" x2="12" y2="15"></line>
-                        </svg>
-                        <p>Click to upload or drag and drop second image</p>
-                        <span class="file-types">PNG, JPG, JPEG, WEBP, BMP (max 50MB)</span>
+            <!-- The second picture of a pair -->
+            <section id="second-section" class="card" hidden>
+                <h2>Second picture</h2>
+                <div id="second-picker"></div>
+                <div id="second-chosen" hidden>
+                    <div class="second-head">
+                        <span id="second-name"></span>
+                        <span class="spacer"></span>
+                        <button id="second-change" class="btn btn-secondary btn-sm">Change second picture</button>
                     </div>
+                    <p class="instruction">Its shape is set by the space the first picture leaves.</p>
+                    <div id="diptych-gap-control">
+                        <label>Gap size: <span id="gap-px-display">~38px</span></label>
+                        <input type="range" id="gap-slider" min="1" max="10" value="1" step="1">
+                        <span id="gap-percent-display">1%</span>
+                    </div>
+                    <div class="image-container">
+                        <img id="crop-image-2" src="" alt="Second picture to crop">
+                    </div>
+                    <div class="crop-info" id="crop-info-2"></div>
+                    <div id="diptych-refresh-bar" hidden>
+                        <span>The space for the second picture changed. Refresh to reset its crop.</span>
+                        <button id="diptych-refresh-btn" class="btn btn-warning btn-sm">Refresh second crop</button>
+                    </div>
+                    <div id="diptych-crop-warning" class="warning-text" hidden></div>
                 </div>
-                <form class="link-row" id="link-form-2">
-                    <input type="url" id="link-input-2" class="link-input" placeholder="or paste a picture link" aria-label="Second picture link" required>
-                    <button class="btn btn-secondary btn-sm">Fetch</button>
-                </form>
-                <div id="upload-status-2"></div>
-                <button id="diptych-cancel-btn" class="btn btn-secondary btn-sm">Cancel second picture</button>
-            </section>
-
-            <!-- Diptych Crop Section (Step 2c) -->
-            <section id="diptych-crop-section" class="card" style="display: none;">
-                <h2>Step 2c: Crop the Second Picture</h2>
-                <p class="instruction">Aspect ratio is locked to fit alongside image 1</p>
-                <div id="diptych-gap-control" style="display: none;">
-                    <label>Gap size: <span id="gap-px-display">~38px</span></label>
-                    <input type="range" id="gap-slider" min="1" max="10" value="1" step="1">
-                    <span id="gap-percent-display">1%</span>
-                </div>
-                <div class="image-container">
-                    <img id="crop-image-2" src="" alt="Second image to crop">
-                </div>
-                <div class="crop-info" id="crop-info-2"></div>
-                <div id="diptych-refresh-bar" style="display: none;">
-                    <span>The space for Image 2 changed — click Refresh to reset its crop.</span>
-                    <button id="diptych-refresh-btn" class="btn btn-warning btn-sm">Refresh Image 2 crop</button>
-                </div>
-                <div id="diptych-crop-warning" class="warning-text" style="display: none;"></div>
             </section>
 
             <!-- Process Section -->
-            <section id="process-section" class="card" style="display: none;">
-                <h2>Step 3: Process</h2>
+            <section id="process-section" class="card" hidden>
+                <h2>Process</h2>
                 <button id="process-btn" class="btn btn-primary">
                     Process &amp; Upscale Image
                 </button>
@@ -117,8 +92,8 @@
             </section>
 
             <!-- Review Section -->
-            <section id="download-section" class="card" style="display: none;">
-                <h2>Step 4: Review and Send</h2>
+            <section id="download-section" class="card" hidden>
+                <h2>Review and Send</h2>
                 <div class="result-preview">
                     <img id="result-image" src="" alt="Processed picture">
                 </div>
@@ -145,9 +120,6 @@
                 </div>
                 <button id="download-btn" class="btn btn-secondary">
                     Download
-                </button>
-                <button id="reset-btn" class="btn btn-secondary">
-                    Start over
                 </button>
             </section>
         </main>
