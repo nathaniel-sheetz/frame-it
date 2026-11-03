@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import config
+from app.tv import TVUnavailable
 
 
 class FakeTV:
@@ -16,6 +17,8 @@ class FakeTV:
         self.current = 'MY_F0001'
         self.art_mode = True
         self.deleted = []
+        self.uploaded = []
+        self.select_unavailable = False
 
     def snapshot(self, cached_thumbs):
         return {
@@ -25,7 +28,13 @@ class FakeTV:
             'thumbs': {content_id: b'jpeg' for content_id in self.photos if content_id not in cached_thumbs},
         }
 
+    def upload(self, jpeg):
+        self.uploaded.append(jpeg)
+        return 'MY_F0002'
+
     def select(self, content_id):
+        if self.select_unavailable:
+            raise TVUnavailable('Could not reach the TV.')
         return self.art_mode
 
     def delete(self, content_id):
@@ -153,6 +162,33 @@ class TestPlaylists:
     def test_setting_one_of_its_pictures_as_art_carries_the_playlist_on_from_it(self, client, playing):
         client.post('/api/art/MY_F0002/select')
         assert client.get('/api/playing').json()['playing']['current']['id'] == playing[1]
+
+    def _jpeg(self):
+        buf = io.BytesIO()
+        Image.new('RGB', (8, 8), color='red').save(buf, format='JPEG')
+        return buf.getvalue()
+
+    def test_sending_one_of_its_pictures_carries_the_playlist_on_from_it(self, client, main, playing):
+        resp = client.post('/api/art', data={'show': 'true', 'crop': 'false'},
+                           files={'file': ('Falls.jpg', self._jpeg(), 'image/jpeg')})
+
+        assert resp.status_code == 200
+        assert resp.json() == {'id': 'MY_F0002', 'selected': True, 'shown': True}
+        assert len(main.tv.uploaded) == 1
+        assert client.get('/api/playing').json()['playing']['current']['id'] == playing[1]
+
+    def test_a_picture_already_on_the_tv_is_kept_when_it_cannot_be_displayed(self, client, main, playing):
+        main.tv.select_unavailable = True
+
+        resp = client.post('/api/art', data={'show': 'true', 'crop': 'false'},
+                           files={'file': ('Falls.jpg', self._jpeg(), 'image/jpeg')})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert (data['id'], data['selected'], data['shown']) == ('MY_F0002', False, False)
+        assert 'could not be put on display' in data['warning']
+        assert len(main.tv.uploaded) == 1
+        assert client.get('/api/playing').json()['playing']['current']['id'] == playing[0]
 
     def test_setting_any_other_picture_as_art_stops_the_playlist(self, client, playing):
         client.post('/api/art/MY_F0003/select')

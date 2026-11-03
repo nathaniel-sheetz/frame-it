@@ -4,16 +4,19 @@ Everything here is limited to the art channel: no power or remote-key commands
 are ever sent, and only the "My Photos" category is managed. The one exception
 is pairing, which opens the remote-control channel once to be given a token.
 """
+import json
 import logging
+import random
 import re
 import threading
 from contextlib import contextmanager
-from pathlib import Path
+from socket import create_connection
 
 import websocket
 from samsungtvws import exceptions
 from samsungtvws.art import SamsungTVArt
 from samsungtvws.connection import SamsungTVWSConnection
+from samsungtvws.helper import get_ssl_context
 from samsungtvws.remote import REMOTE_ENDPOINT
 
 from .config import TOKEN_FILE, Config
@@ -41,24 +44,71 @@ def check_photo_id(content_id: str) -> str:
     return content_id
 
 
-def _thumbnails(art, content_ids: list[str]) -> dict[str, bytes]:
+def _receive(sock, size: int) -> bytes:
+    """Exactly `size` bytes, or ConnectionError if the TV hangs up first."""
+    data = bytearray()
+    while len(data) < size:
+        packet = sock.recv(size - len(data))
+        if not packet:
+            raise ConnectionError("The TV closed the thumbnail transfer part way through")
+        data.extend(packet)
+    return bytes(data)
+
+
+def _thumbnail_transfer(art, content_ids: list[str], timeout: float) -> dict[str, bytes]:
+    """One try at the thumbnails, over the second connection the TV opens for them.
+
+    This stands in for the library's get_thumbnail_list. That one has no timeout
+    on the connection, and reads a connection the TV has closed forever, holding
+    the lock that every other TV request waits on.
+    """
+    reply = art._send_art_request({
+        "request": "get_thumbnail_list",
+        "content_id_list": [{"content_id": content_id} for content_id in content_ids],
+        "conn_info": {"d2d_mode": "socket", "connection_id": random.randrange(4 * 1024 * 1024 * 1024), "id": art.get_uuid()},
+    })
+    conn_info = json.loads(reply["conn_info"])
+    sock = create_connection((conn_info["ip"], int(conn_info["port"])), timeout=timeout)
+    try:
+        if conn_info.get("secured", False):
+            sock = get_ssl_context().wrap_socket(sock)
+        thumbs = {}
+        last, total = -1, 1
+        while last + 1 < total:
+            # TODO: cap the header and fileLength. A multi-gigabyte length is
+            # read with only a per-recv timeout, so a slow sender holds this
+            # lock and grows memory until the read finishes.
+            header = json.loads(_receive(sock, int.from_bytes(_receive(sock, 4), "big")))
+            last, total = int(header["num"]), int(header["total"])
+            # TODO: fileID is the cache filename. A value with ".." is written
+            # outside the thumbs directory. Keep only MY_F ids.
+            thumbs[header["fileID"]] = _receive(sock, int(header["fileLength"]))
+        return thumbs
+    finally:
+        sock.close()
+
+
+def _thumbnails(art, content_ids: list[str], timeout: float) -> dict[str, bytes]:
     """Thumbnails by content id.
 
     The TV sends them over a second connection, and now and then drops it as it
-    opens. The art channel itself is unharmed, so they are simply asked for again.
+    opens or part way through. The art channel itself is unharmed, so they are
+    simply asked for again.
     """
     for tries_left in reversed(range(THUMBNAIL_TRIES)):
         try:
-            thumbs = art.get_thumbnail_list(content_ids)
+            return _thumbnail_transfer(art, content_ids, timeout)
+        except TimeoutError:
+            # A TV that stopped sending does not start again, and asking again holds up every other request.
+            raise
         except OSError:
             if not tries_left:
                 raise
-        except (ValueError, KeyError) as e:
-            # A connection closed without an error leaves a reply that cannot be read. It is the same drop.
+        except (ValueError, KeyError, TypeError, OverflowError) as e:
+            # A reply that cannot be read is the same drop. A null length or a
+            # port outside 0-65535 is that kind of reply, not a server error.
             if not tries_left:
                 raise ConnectionError("The TV cut the thumbnail transfer short") from e
-        else:
-            return {Path(name).stem: bytes(data) for name, data in thumbs.items()}
 
 
 class FrameTV:
@@ -79,7 +129,10 @@ class FrameTV:
             # requests wait for their own response.
             key_press_delay=0,
         )
-        with self._lock:
+        # A request stuck on the TV must not leave every later one waiting behind it.
+        if not self._lock.acquire(timeout=self._cfg.tv_timeout):
+            raise TVUnavailable("The TV is still busy with an earlier request. Try again in a moment.")
+        try:
             try:
                 if not TOKEN_FILE.exists():
                     self._pair()
@@ -93,6 +146,10 @@ class FrameTV:
                 raise TVUnavailable(f"The TV rejected the request: {e}") from e
             finally:
                 art.close()
+        finally:
+            # close() can raise. The lock still has to come back, or every later
+            # request waits out tv_timeout and then reports the TV as busy.
+            self._lock.release()
 
     def _pair(self):
         """Have the TV show its "Allow" prompt and save the token it hands back.
@@ -125,7 +182,7 @@ class FrameTV:
             photos = art.available(MY_PHOTOS)
             missing = [p["content_id"] for p in photos if p["content_id"] not in cached_thumbs]
             try:
-                thumbs = _thumbnails(art, missing) if missing else {}
+                thumbs = _thumbnails(art, missing, self._cfg.tv_timeout) if missing else {}
             except OSError:
                 # The list is still worth having. Each missing thumbnail is asked for again on its own.
                 log.warning("The TV did not send thumbnails for %s", ", ".join(missing))
@@ -150,10 +207,12 @@ class FrameTV:
     def thumbnail(self, content_id: str) -> bytes | None:
         check_photo_id(content_id)
         with self._art() as art:
-            thumbs = _thumbnails(art, [content_id])
+            thumbs = _thumbnails(art, [content_id], self._cfg.tv_timeout)
         return next(iter(thumbs.values()), None)
 
     def upload(self, jpeg: bytes) -> str:
+        # TODO: art.upload's bulk socket has no timeout. A TV that stops reading
+        # holds this lock until the process restarts.
         with self._art() as art:
             return art.upload(jpeg, file_type="jpg", matte="none", portrait_matte="none")
 

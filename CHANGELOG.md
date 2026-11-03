@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.6.1.0] - 2026-11-02
+
+### Fixed
+
+- A thumbnail the TV stops sending no longer holds up every later request.
+  The transfer times out, one cut off part way through is asked for again,
+  and the photo list still comes back without the thumbnails that never
+  arrived.
+- A request that finds the TV busy with an earlier one is told to try again
+  in a moment, instead of waiting with no end.
+- Closing the connection to the TV can fail without leaving every later
+  request stuck until the app is restarted.
+- A thumbnail header that is not a number is treated as a dropped transfer.
+  A missing length, or a port outside 0-65535, is not a server error.
+- Displaying a picture just uploaded, when that second step cannot reach
+  the TV, is a warning. The picture is already there, so this is not an
+  error to retry.
+
 ## [0.6.0.0] - 2026-10-24
 
 ### Added
