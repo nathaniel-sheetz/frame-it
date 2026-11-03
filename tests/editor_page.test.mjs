@@ -28,6 +28,7 @@ function element(id) {
         style: {},
         classList: { add() {}, remove() {}, toggle() {} },
         append(...nodes) { this.children.push(...nodes); },
+        after() {},
         replaceChildren(...nodes) { this.children = nodes; },
         addEventListener() {},
         setAttribute() {},

@@ -94,6 +94,15 @@
   .chip button:hover:not(:disabled) { color: var(--danger); }
   /* Comes from the picture this one was made from, and is changed there. */
   .chip.fixed { padding-right: 10px; color: var(--muted); border-style: dashed; }
+  /* Known creators or subjects that match what is being typed. Drawn by hand, since Firefox for
+     Android shows nothing for a datalist. */
+  .suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .suggest:empty { display: none; }
+  .suggest button {
+    padding: 3px 10px; font-size: 13px; color: var(--text); overflow-wrap: anywhere; text-align: left;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 999px;
+  }
+  .suggest button:hover, .suggest button[aria-selected=true] { border-color: var(--muted); background: var(--panel); }
 </style>
 </head>
 <body>
@@ -158,8 +167,6 @@
       <button class="primary">Save</button>
     </div>
   </form>
-  <datalist id="known-creators"></datalist>
-  <datalist id="known-subjects"></datalist>
 </dialog>
 <script src="/static/playing.js"></script>
 <script>
@@ -167,6 +174,9 @@ const $ = id => document.getElementById(id);
 const grid = $('grid'), msg = $('msg');
 
 const viewer = $('viewer'), find = $('find');
+
+// Every creator and subject in the library, offered while typing.
+const known = { creators: [], subjects: [] };
 
 // A picture's creators or subjects: its own, then those of what it was made from.
 const described = (picture, field) => [...picture[field], ...picture.from_originals[field]];
@@ -268,8 +278,7 @@ async function load() {
   $('count').hidden = false;
   // Offered while typing, so the same creator or subject is spelt the same way each time.
   for (const field of ['creators', 'subjects']) {
-    const known = [...new Set(data.items.flatMap(p => p[field]))].sort((a, b) => a.localeCompare(b));
-    $(`known-${field}`).replaceChildren(...known.map(value => new Option(value)));
+    known[field] = [...new Set(data.items.flatMap(p => p[field]))].sort((a, b) => a.localeCompare(b));
   }
   render();
 }
@@ -402,17 +411,21 @@ function card(picture) {
   return el;
 }
 
-// A row of chips with a box for typing the next one.
-function chips(el, known, placeholder) {
-  let own = [], fixed = [];
+// A row of chips with a box for typing the next one, and the known values that match what is typed.
+function chips(el, field, placeholder) {
+  let own = [], fixed = [], offered = [], picked = -1;
   const row = document.createElement('span');
   const input = document.createElement('input');
   input.type = 'text';
   input.maxLength = 100;
   input.autocomplete = 'off';
   input.placeholder = placeholder;
-  input.setAttribute('list', known);
   el.append(row, input);
+  const list = document.createElement('div');
+  list.className = 'suggest';
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-label', `Known ${field}`);
+  el.after(list);
 
   function chip(value, onremove) {
     const span = document.createElement('span');
@@ -437,22 +450,80 @@ function chips(el, known, placeholder) {
       ...own.map((value, i) => chip(value, () => { own.splice(i, 1); draw(); input.focus(); })));
   }
 
-  const has = value => own.some(v => v.toLowerCase() === value.toLowerCase());
+  const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+  const has = value => own.some(v => same(v, value));
+  const tidy = text => text.trim().replace(/\s+/g, ' ');
+  // The spelling already in the library, so typing "monet" adds "Monet" rather than a second one.
+  const spelt = value => known[field].find(v => same(v, value)) || value;
 
   // Turn what is in the box into chips. A comma separates one from the next.
   function take() {
     for (const part of input.value.split(',')) {
-      const value = part.trim().replace(/\s+/g, ' ');
+      const value = spelt(tidy(part));
       if (value && !has(value)) own.push(value);
     }
     input.value = '';
     draw();
+    suggest();
   }
 
-  input.oninput = () => { if (input.value.includes(',')) take(); };
+  // Offer the known values that match the text after the last comma: those with a word that
+  // starts with it first, then those that only contain it.
+  function suggest() {
+    const typed = tidy(input.value.split(',').pop()).toLowerCase();
+    offered = [];
+    if (typed && document.activeElement === input) {
+      const open = known[field].filter(v => !has(v) && !fixed.some(f => same(f, v)));
+      const starts = v => { const low = v.toLowerCase(); return low.startsWith(typed) || low.includes(` ${typed}`); };
+      offered = [...open.filter(starts), ...open.filter(v => !starts(v) && v.toLowerCase().includes(typed))].slice(0, 8);
+    }
+    picked = -1;
+    drawList();
+  }
+
+  function drawList() {
+    list.replaceChildren(...offered.map((value, i) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.tabIndex = -1;
+      b.textContent = value;
+      b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', String(i === picked));
+      // Keeps the typing box focused, so leaving it does not turn the half-typed text into a chip.
+      b.onmousedown = e => e.preventDefault();
+      b.onclick = () => choose(value);
+      return b;
+    }));
+  }
+
+  function choose(value) {
+    const parts = input.value.split(',');
+    parts[parts.length - 1] = value;
+    input.value = parts.join(',');
+    take();
+    input.focus();
+  }
+
+  input.oninput = () => { if (input.value.includes(',')) take(); else suggest(); };
+  input.onfocus = suggest;
+  input.onblur = () => { offered = []; drawList(); };
   input.onchange = take;
   input.onkeydown = e => {
-    if (e.key === 'Enter' && input.value.trim()) {
+    const n = offered.length;
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && n) {
+      e.preventDefault();
+      if (e.key === 'ArrowDown') picked = picked === n - 1 ? -1 : picked + 1;
+      else picked = picked === -1 ? n - 1 : picked - 1;
+      drawList();
+    } else if (e.key === 'Enter' && picked >= 0) {
+      e.preventDefault();
+      choose(offered[picked]);
+    } else if (e.key === 'Escape' && n) {
+      // Closes the list first, and the popup only on a second Escape.
+      e.preventDefault();
+      offered = [];
+      drawList();
+    } else if (e.key === 'Enter' && input.value.trim()) {
       // Enter in an empty box saves, like Enter in the name box.
       e.preventDefault();
       take();
@@ -464,14 +535,14 @@ function chips(el, known, placeholder) {
   el.onclick = e => { if (e.target === el) input.focus(); };
 
   return {
-    set(values, inherited) { own = [...values]; fixed = inherited; input.value = ''; draw(); },
+    set(values, inherited) { own = [...values]; fixed = inherited; input.value = ''; draw(); suggest(); },
     read() { take(); return own; },
   };
 }
 
 const fields = {
-  creators: chips($('viewer-creators'), 'known-creators', 'Add a creator'),
-  subjects: chips($('viewer-subjects'), 'known-subjects', 'Add a subject'),
+  creators: chips($('viewer-creators'), 'creators', 'Add a creator'),
+  subjects: chips($('viewer-subjects'), 'subjects', 'Add a subject'),
 };
 let viewing = null;
 

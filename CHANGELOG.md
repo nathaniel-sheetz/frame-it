@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.6.2.0] - 2026-11-02
+
+### Fixed
+
+- Creators and subjects are suggested while typing on every browser,
+  including Firefox for Android, which never showed the old list. Matching
+  names appear under the box to tap, or to pick with the arrow keys and Enter.
+- Typing a creator or subject that is already in the library with different
+  capitals keeps the existing spelling, so "monet" adds "Monet" rather than a
+  second name.
+
 ## [0.6.1.0] - 2026-11-02
 
 ### Fixed
