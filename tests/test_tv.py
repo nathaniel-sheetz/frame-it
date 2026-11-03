@@ -1,5 +1,6 @@
 import json
 import ssl
+from dataclasses import replace
 
 import pytest
 from samsungtvws import exceptions
@@ -30,8 +31,80 @@ def television(monkeypatch):
             self.dropped_transfers = 0
             # How many times it is closed without an error instead, before anything was sent.
             self.empty_replies = 0
+            # How many times it is closed without an error part way through a picture.
+            self.cut_transfers = 0
+            # How many times the TV stops sending part way through and leaves it open.
+            self.stalled_transfers = 0
+            # How many times a thumbnail header names a length that is not a number.
+            self.bad_lengths = 0
+            self.secured = False
+            self.port = '50000'
+            self.close_error = None
+            self.transfers = []
 
     television = Television()
+
+    class Transfer:
+        """The second connection the TV sends thumbnails over, a few bytes at a time."""
+        def __init__(self, data, *, then=None):
+            # What a read does once the data has run out: return nothing (closed), or raise.
+            self.data, self.then = data, then
+            self.timeout = None
+            self.closed = self.tls = False
+            self.reads_after_close = 0
+
+        def recv(self, size):
+            if not self.data:
+                if self.then:
+                    raise self.then
+                # Reading a closed connection again and again is the hang this guards against.
+                self.reads_after_close += 1
+                assert self.reads_after_close < 100, 'kept reading a connection the TV closed'
+                return b''
+            packet, self.data = self.data[:min(size, 3)], self.data[min(size, 3):]
+            return packet
+
+        def close(self):
+            self.closed = True
+
+    def connect(address, timeout):
+        if address[1] > 65535:
+            raise OverflowError('port must be 0-65535')
+        content_ids = television.requested
+        bad_length = False
+        if television.bad_lengths:
+            television.bad_lengths -= 1
+            bad_length = True
+        stream = b''
+        for num, content_id in enumerate(content_ids):
+            header = json.dumps({'fileID': content_id, 'fileType': 'jpg',
+                                 'fileLength': None if bad_length else 4,
+                                 'num': num, 'total': len(content_ids)}).encode()
+            stream += len(header).to_bytes(4, 'big') + header
+            if not bad_length:
+                stream += b'jpeg'
+        if television.dropped_transfers:
+            television.dropped_transfers -= 1
+            transfer = Transfer(b'', then=ssl.SSLEOFError('EOF occurred in violation of protocol'))
+        elif television.empty_replies:
+            television.empty_replies -= 1
+            transfer = Transfer(b'')
+        elif television.cut_transfers:
+            television.cut_transfers -= 1
+            transfer = Transfer(stream[:-2])
+        elif television.stalled_transfers:
+            television.stalled_transfers -= 1
+            transfer = Transfer(stream[:-2], then=TimeoutError('timed out'))
+        else:
+            transfer = Transfer(stream)
+        transfer.timeout = timeout
+        television.transfers.append(transfer)
+        return transfer
+
+    class TLS:
+        def wrap_socket(self, sock):
+            sock.tls = True
+            return sock
 
     class Remote:
         def __init__(self, host, *, endpoint, token_file, **kwargs):
@@ -56,6 +129,8 @@ def television(monkeypatch):
 
         def close(self):
             television.calls.append('close art')
+            if television.close_error:
+                raise television.close_error
 
         def get_artmode(self):
             return 'on'
@@ -69,19 +144,19 @@ def television(monkeypatch):
         def get_current(self):
             return {'content_id': television.photos[0]}
 
-        def get_thumbnail_list(self, content_ids):
-            television.calls.append(f'thumbnails {" ".join(content_ids)}')
-            if television.dropped_transfers:
-                television.dropped_transfers -= 1
-                raise ssl.SSLEOFError('EOF occurred in violation of protocol')
-            if television.empty_replies:
-                television.empty_replies -= 1
-                # What the TV library does with the nothing it was sent.
-                json.loads('')
-            return {f'{content_id}.jpg': bytearray(b'jpeg') for content_id in content_ids}
+        def get_uuid(self):
+            return 'request-id'
+
+        def _send_art_request(self, request):
+            assert request['request'] == 'get_thumbnail_list'
+            television.requested = [item['content_id'] for item in request['content_id_list']]
+            television.calls.append(f'thumbnails {" ".join(television.requested)}')
+            return {'conn_info': json.dumps({'ip': '192.0.2.1', 'port': television.port, 'secured': television.secured})}
 
     monkeypatch.setattr(tv, 'SamsungTVWSConnection', Remote)
     monkeypatch.setattr(tv, 'SamsungTVArt', Art)
+    monkeypatch.setattr(tv, 'create_connection', connect)
+    monkeypatch.setattr(tv, 'get_ssl_context', TLS)
     return television
 
 
@@ -163,6 +238,44 @@ class TestThumbnails:
 
         assert television.calls.count('thumbnails MY_F0001') == tv.THUMBNAIL_TRIES
 
+    def test_a_transfer_closed_part_way_through_is_asked_for_again(self, television):
+        television.cut_transfers = 1
+
+        assert FrameTV(CFG).thumbnail('MY_F0001') == b'jpeg'
+        assert television.calls.count('thumbnails MY_F0001') == 2
+
+    def test_a_stalled_transfer_is_given_up_on_without_asking_again(self, television):
+        television.stalled_transfers = 99
+
+        with pytest.raises(TVUnavailable, match='Could not reach the TV'):
+            FrameTV(CFG).thumbnail('MY_F0001')
+
+        assert television.calls.count('thumbnails MY_F0001') == 1
+        assert television.calls[-1] == 'close art'
+
+    def test_a_transfer_waits_no_longer_than_the_tv_timeout_and_is_closed(self, television):
+        television.stalled_transfers = 1
+
+        FrameTV(CFG).snapshot(set())
+
+        [transfer] = television.transfers
+        assert transfer.timeout == CFG.tv_timeout
+        assert transfer.closed
+
+    def test_a_secured_transfer_is_read_over_tls(self, television):
+        television.secured = True
+
+        assert FrameTV(CFG).thumbnail('MY_F0001') == b'jpeg'
+        assert television.transfers[0].tls
+
+    def test_the_list_comes_back_when_the_transfer_stalls(self, television):
+        television.stalled_transfers = 1
+
+        snap = FrameTV(CFG).snapshot(set())
+
+        assert [p['content_id'] for p in snap['photos']] == ['MY_F0002', 'MY_F0001']
+        assert snap['thumbs'] == {}
+
     def test_the_list_comes_back_when_every_transfer_closes(self, television):
         television.empty_replies = 99
 
@@ -193,6 +306,59 @@ class TestThumbnails:
         assert snap['thumbs'] == {}
         assert snap['art_mode'] is True
         assert snap['current'] == 'MY_F0002'
+
+    def test_a_length_that_is_not_a_number_is_given_up_on_and_the_tv_is_free(self, television):
+        television.bad_lengths = 99
+        frame = FrameTV(CFG)
+
+        with pytest.raises(TVUnavailable, match='Could not reach the TV'):
+            frame.thumbnail('MY_F0001')
+
+        assert television.calls.count('thumbnails MY_F0001') == tv.THUMBNAIL_TRIES
+        assert frame.select('MY_F0001') is True
+
+    def test_a_port_outside_the_tcp_range_is_given_up_on(self, television):
+        television.port = '70000'
+        frame = FrameTV(CFG)
+
+        with pytest.raises(TVUnavailable, match='Could not reach the TV'):
+            frame.thumbnail('MY_F0001')
+
+        assert television.calls.count('thumbnails MY_F0001') == tv.THUMBNAIL_TRIES
+        assert frame.select('MY_F0001') is True
+
+
+class TestBusy:
+    @pytest.fixture(autouse=True)
+    def paired(self, token_file):
+        token_file.write_text('12345678')
+
+    def test_a_request_behind_a_stuck_one_is_told_the_tv_is_busy(self, television):
+        frame = FrameTV(replace(CFG, tv_timeout=0.05))
+        frame._lock.acquire()
+
+        with pytest.raises(TVUnavailable, match='still busy'):
+            frame.select('MY_F0001')
+
+        assert television.calls == []
+
+    def test_the_tv_is_free_again_after_a_failed_request(self, television):
+        frame = FrameTV(replace(CFG, tv_timeout=0.05))
+        television.dropped_transfers = 99
+        with pytest.raises(TVUnavailable):
+            frame.thumbnail('MY_F0001')
+
+        assert frame.select('MY_F0001') is True
+
+    def test_the_tv_is_free_again_when_closing_the_connection_fails(self, television):
+        television.close_error = OSError('reset')
+        frame = FrameTV(CFG)
+
+        with pytest.raises(OSError, match='reset'):
+            frame.select('MY_F0001')
+
+        television.close_error = None
+        assert frame.select('MY_F0001') is True
 
 
 class TestWatching:

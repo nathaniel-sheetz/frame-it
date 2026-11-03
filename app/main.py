@@ -123,10 +123,22 @@ def upload(file: UploadFile = File(...), crop: bool = Form(True), show: bool = F
     content_id = tv.upload(jpeg)
     if not content_id:
         raise HTTPException(502, "The TV did not confirm the upload.")
-    shown = tv.select(content_id) if show else False
+    shown = False
+    warning = None
     if show:
-        player.chosen(content_id, shown)
-    return {"id": content_id, "selected": show, "shown": shown}
+        try:
+            shown = tv.select(content_id)
+        except TVUnavailable:
+            # The picture is on the TV by now, so this is not an error to retry:
+            # sending again would upload a second copy.
+            show = False
+            warning = "Sent to the TV, but it could not be put on display."
+        else:
+            player.chosen(content_id, shown)
+    body = {"id": content_id, "selected": show, "shown": shown}
+    if warning:
+        body["warning"] = warning
+    return body
 
 
 @app.post("/api/art/{content_id}/select")
