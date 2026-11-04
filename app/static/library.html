@@ -496,11 +496,13 @@ function chips(el, field, placeholder) {
     }));
   }
 
+  // What was typed before the last comma becomes chips as usual. The picked value goes in whole,
+  // so a known name with a comma in it stays one chip.
   function choose(value) {
-    const parts = input.value.split(',');
-    parts[parts.length - 1] = value;
-    input.value = parts.join(',');
+    input.value = input.value.split(',').slice(0, -1).join(',');
     take();
+    if (!has(value)) own.push(value);
+    draw();
     input.focus();
   }
 

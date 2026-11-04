@@ -15,6 +15,8 @@ Versions are four-part: `MAJOR.MINOR.PATCH.MICRO`.
 - Typing a creator or subject that is already in the library with different
   capitals keeps the existing spelling, so "monet" adds "Monet" rather than a
   second name.
+- Picking a suggested name that has a comma in it adds it as one name rather
+  than splitting it in two.
 
 ## [0.6.1.0] - 2026-11-02
 

@@ -34,6 +34,7 @@ function element(id) {
         setAttribute() {},
         removeAttribute(name) { if (name === 'src') this.src = ''; },
         scrollIntoView() {},
+        focus() {},
         click() {},
         close() {},
         querySelector() { return element(); },
@@ -195,13 +196,14 @@ function editor() {
     assert.equal(fetched.some(url => url.startsWith('/api/library/')), false);
 }
 
-// Choosing more than 100 pictures stays on the library and says so.
-{
+// The library page, loaded with an empty library.
+async function library() {
     const html = fs.readFileSync(new URL('app/static/library.html', root), 'utf8');
     const source = html.match(/<script>([\s\S]*?)<\/script>/)[1] + `
-        globalThis.__library = { chosen, msg };
+        globalThis.__library = { chosen, msg, chips, known };
     `;
-    const { context, document, location } = page();
+    const loaded = page();
+    const { context, location } = loaded;
     location.pathname = '/library';
     location.href = 'http://localhost/library';
     context.fetch = async (url) => {
@@ -211,7 +213,37 @@ function editor() {
     };
     load(context, source, 'app/static/library.html');
     for (let i = 0; i < 30; i++) await new Promise(resolve => setImmediate(resolve));
+    return loaded;
+}
 
+// A box for typing creators or subjects, focused, with `names` already in the library.
+async function tagBox(field, names) {
+    const { context, document } = await library();
+    const { chips, known } = context.__library;
+    known[field] = names;
+    const el = document.getElementById('tag-box');
+    el.after = node => { el.list = node; };
+    const box = chips(el, field, 'Add');
+    const input = el.children[1];
+    document.activeElement = input;
+    return {
+        box,
+        list: el.list,
+        offered: () => el.list.children.map(b => b.textContent).join(' | '),
+        type(text) { input.value = text; input.oninput(); },
+        key(name) {
+            const e = { key: name, prevented: false, preventDefault() { this.prevented = true; } };
+            input.onkeydown(e);
+            return e;
+        },
+        value: () => input.value,
+        read: () => [...box.read()],
+    };
+}
+
+// Choosing more than 100 pictures stays on the library and says so.
+{
+    const { context, location, document } = await library();
     const { chosen } = context.__library;
     for (let i = 0; i < 101; i++) chosen.add(i.toString(16).padStart(32, '0'));
     document.getElementById('edit-chosen').onclick();
@@ -225,6 +257,66 @@ function editor() {
     const opened = new URL(location.href, 'http://localhost');
     assert.equal(opened.pathname, '/editor');
     assert.equal(opened.searchParams.get('ids').split(',').length, 100);
+}
+
+// A name typed with different capitals keeps the spelling already in the library.
+{
+    const t = await tagBox('creators', ['Monet']);
+    t.type('monet');
+    assert.equal(t.key('Enter').prevented, true);
+    assert.deepEqual(t.read(), ['Monet']);
+}
+
+// Names with a word starting with what is typed come first, then names that only contain it.
+{
+    const t = await tagBox('creators', ['Claude Monet', 'Edmond', 'Monet']);
+    t.type('mon');
+    assert.equal(t.offered(), 'Claude Monet | Monet | Edmond');
+}
+
+// Names already on the picture, or on the picture it was made from, are not offered again.
+{
+    const t = await tagBox('creators', ['Monet', 'Morisot', 'Renoir']);
+    t.box.set(['Monet'], ['Renoir']);
+    t.type('o');
+    assert.equal(t.offered(), 'Morisot');
+}
+
+// The arrow keys and Enter pick a suggestion; Escape closes the list before the popup.
+{
+    const t = await tagBox('creators', ['Monet', 'Morisot']);
+    t.type('mo');
+    assert.equal(t.offered(), 'Monet | Morisot');
+    t.key('ArrowDown');
+    assert.equal(t.key('Enter').prevented, true);
+    assert.deepEqual(t.read(), ['Monet']);
+    assert.equal(t.value(), '');
+
+    t.type('mo');
+    t.key('ArrowUp');
+    t.key('Enter');
+    assert.deepEqual(t.read(), ['Monet', 'Morisot']);
+
+    t.box.set([], []);
+    t.type('mo');
+    assert.equal(t.key('Escape').prevented, true);
+    assert.equal(t.offered(), '');
+    assert.equal(t.value(), 'mo');
+    assert.equal(t.key('Escape').prevented, false);
+}
+
+// A comma turns the typing into a chip, and a picked name with a comma in it stays one chip.
+{
+    const t = await tagBox('creators', ['Monet', 'Renoir', 'Smith, John']);
+    t.type('Monet,');
+    assert.deepEqual(t.read(), ['Monet']);
+    t.type('ren');
+    assert.equal(t.offered(), 'Renoir');
+    t.list.children[0].onclick();
+    t.type('smi');
+    assert.equal(t.offered(), 'Smith, John');
+    t.list.children[0].onclick();
+    assert.deepEqual(t.read(), ['Monet', 'Renoir', 'Smith, John']);
 }
 
 console.log('editor page checks passed');
